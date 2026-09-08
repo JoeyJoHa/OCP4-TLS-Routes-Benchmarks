@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OCP4 TLS Route Benchmarks</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="top">
+    <div>
+      <p class="eyebrow">OpenShift TLS target</p>
+      <h1>Route and Service benchmarks</h1>
+    </div>
+    <label class="refresh-toggle">
+      <input type="checkbox" id="auto-refresh" checked>
+      Auto-refresh
+    </label>
+  </header>
+
+  <section class="cards" id="connection-cards">
+    <article class="card">
+      <h2>This request</h2>
+      <p class="muted" id="conn-summary">Loading connection details…</p>
+      <dl id="conn-details"></dl>
+    </article>
+    <article class="card">
+      <h2>PVC blobs</h2>
+      <p class="muted">Files written under DATA_DIR for reuse in tables.</p>
+      <ul id="blob-list" class="blob-list"></ul>
+    </article>
+  </section>
+
+  <section class="table-panel">
+    <div class="table-head">
+      <h2>Benchmark results</h2>
+      <div class="filters">
+        <label>
+          Operation
+          <select id="filter-op">
+            <option value="">All</option>
+            <option value="generate">Generate</option>
+            <option value="upload">Upload</option>
+            <option value="download">Download</option>
+          </select>
+        </label>
+        <label>
+          TLS at pod
+          <select id="filter-tls">
+            <option value="">All</option>
+            <option value="true">Yes</option>
+            <option value="false">No</option>
+          </select>
+        </label>
+      </div>
+    </div>
+    <p class="muted" id="table-hint">Upload or download from a Linux VM or another pod; rows appear here from the PVC log.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Time (UTC)</th>
+            <th>Operation</th>
+            <th>Blob</th>
+            <th>Size</th>
+            <th>TLS</th>
+            <th>Client</th>
+            <th>Write ms</th>
+            <th>Read ms</th>
+            <th>Total ms</th>
+            <th>MiB/s</th>
+          </tr>
+        </thead>
+        <tbody id="results-body">
+          <tr><td colspan="10" class="empty">No runs yet.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <script src="/static/app.js"></script>
+</body>
+</html>
