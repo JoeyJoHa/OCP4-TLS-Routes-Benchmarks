@@ -1,5 +1,5 @@
-# Stage 1: build a static Go binary
-FROM golang:1.23-bookworm AS builder
+# Stage 1: static Go binary (image already cached from make test)
+FROM docker.io/library/golang:1.23-bookworm AS builder
 WORKDIR /src
 
 COPY go.mod ./
@@ -9,8 +9,12 @@ COPY web ./web
 
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/tlsbench ./cmd/server
 
-# Stage 2: OpenShift-friendly runtime with network tools
-FROM registry.access.redhat.com/ubi9/ubi-minimal:9.6
+# BusyBox from Docker Hub (no Alpine package CDN, no UBI microdnf)
+FROM docker.io/library/busybox:1.36 AS tools
+
+# Runtime reuses golang:bookworm: curl and CA certs are already in the image.
+# apk against dl-cdn.alpinelinux.org failed TLS verify in this environment.
+FROM docker.io/library/golang:1.23-bookworm
 
 ENV HTTP_ADDR=:8080 \
     HTTPS_ADDR=:8443 \
@@ -24,16 +28,17 @@ ENV HTTP_ADDR=:8080 \
     SSL_CERT_FILE=/certs/ca-bundle.pem \
     CURL_CA_BUNDLE=/certs/ca-bundle.pem
 
-RUN microdnf -y install --setopt=install_weak_deps=0 \
-        iputils traceroute nmap-ncat curl ca-certificates \
-    && microdnf clean all \
+COPY --from=builder /out/tlsbench /usr/local/bin/tlsbench
+COPY --from=tools /bin/busybox /usr/local/bin/busybox
+COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
+
+RUN chmod 0755 /usr/local/bin/tlsbench /usr/local/bin/entrypoint.sh /usr/local/bin/busybox \
+    && ln -sf /usr/local/bin/busybox /usr/local/bin/ping \
+    && ln -sf /usr/local/bin/busybox /usr/local/bin/traceroute \
+    && ln -sf /usr/local/bin/busybox /usr/local/bin/nc \
     && mkdir -p /certs /data /etc/pki/internal-ca \
     && chgrp -R 0 /certs /data /etc/pki/internal-ca \
     && chmod -R g=u /certs /data /etc/pki/internal-ca
-
-COPY --from=builder /out/tlsbench /usr/local/bin/tlsbench
-COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod 0755 /usr/local/bin/tlsbench /usr/local/bin/entrypoint.sh
 
 EXPOSE 8080 8443
 

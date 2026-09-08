@@ -4,11 +4,16 @@ set -eu
 BUNDLE="${TLS_CA_BUNDLE_FILE:-/certs/ca-bundle.pem}"
 CA_DIR="${TLS_CA_DIR:-/etc/pki/internal-ca}"
 CA_FILE="${TLS_CA_FILE:-/certs/ca.crt}"
-SYSTEM_BUNDLE="/etc/pki/tls/certs/ca-bundle.crt"
-
 mkdir -p "$(dirname "$BUNDLE")" "$CA_DIR" /certs /data/blobs /data/results
 
-if [ -f "$SYSTEM_BUNDLE" ]; then
+SYSTEM_BUNDLE=""
+if [ -f /etc/ssl/certs/ca-certificates.crt ]; then
+  SYSTEM_BUNDLE="/etc/ssl/certs/ca-certificates.crt"
+elif [ -f /etc/pki/tls/certs/ca-bundle.crt ]; then
+  SYSTEM_BUNDLE="/etc/pki/tls/certs/ca-bundle.crt"
+fi
+
+if [ -n "$SYSTEM_BUNDLE" ]; then
   cp "$SYSTEM_BUNDLE" "$BUNDLE"
 else
   : > "$BUNDLE"
