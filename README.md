@@ -16,7 +16,9 @@ A Go HTTPS/HTTP target for OpenShift. Deploy it in-cluster, hit it through a **S
 
 ## Install
 
-### Local (Go 1.23+)
+### Local
+
+Go 1.23+ is optional. If `go` is not on your `PATH`, `make test` and `make run` use Podman or Docker instead.
 
 ```bash
 git clone https://github.com/JoeyJoHa/OCP4-TLS-Routes-Benchmarks.git
@@ -28,10 +30,12 @@ make run
 
 Open [http://127.0.0.1:8080/](http://127.0.0.1:8080/) for the dashboard. HTTPS is on [https://127.0.0.1:8443/](https://127.0.0.1:8443/) (self-signed).
 
+To install Go later: https://go.dev/dl/ or `brew install go`.
+
 ### Container
 
 ```bash
-make image                 # IMAGE=tlsbench:dev
+make image                 # IMAGE=tlsbench:dev (podman or docker)
 make compose-up            # publishes 8080 and 8443
 ```
 
@@ -161,4 +165,4 @@ Default OpenShift `restricted-v2` SCC drops `NET_RAW`, so `ping` / `traceroute` 
 
 ## Makefile
 
-`make help`, `build`, `test`, `test-container`, `run`, `image`, `compose-up`, `compose-down`, `fmt`, `vet`. Override `IMAGE` and `GOFLAGS` as needed. If Go is not installed locally, use `make test-container`.
+`make help`, `build`, `test`, `run`, `image`, `compose-up`, `compose-down`, `fmt`, `vet`. Override `IMAGE` and `GOFLAGS` as needed. Without a local Go toolchain, `make test` and `make run` use Podman or Docker.
