@@ -1,0 +1,19 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: tlsbench-reencrypt
+  namespace: tlsbench
+  labels:
+    app.kubernetes.io/name: tlsbench
+    tlsbench.termination: reencrypt
+spec:
+  to:
+    kind: Service
+    name: tlsbench
+  port:
+    targetPort: https
+  tls:
+    termination: reencrypt
+    insecureEdgeTerminationPolicy: Redirect
+    # Set destinationCACertificate from the pod CA after first start:
+    #   ./scripts/patch-reencrypt-ca.sh tlsbench tlsbench tlsbench-reencrypt

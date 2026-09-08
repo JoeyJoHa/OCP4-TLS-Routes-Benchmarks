@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tlsbench-internal-ca
+  namespace: tlsbench
+  labels:
+    app.kubernetes.io/name: tlsbench
+data:
+  README.txt: |
+    Replace this file with PEM certificates (*.crt or *.pem) for cluster-internal
+    CAs. Pod-to-pod curl uses CURL_CA_BUNDLE built from this directory at startup.
