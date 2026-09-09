@@ -17,7 +17,10 @@ shift
 if [[ $# -gt 0 ]]; then
   shift
 fi
-CURL_EXTRA=("$@")
+CURL_EXTRA=()
+if [[ $# -gt 0 ]]; then
+  CURL_EXTRA=("$@")
+fi
 
 NAME="vm-${SIZE}.bin"
 WORKDIR="$(mktemp -d)"
@@ -26,19 +29,43 @@ FILE="${WORKDIR}/${NAME}"
 
 head -c "${SIZE}" /dev/urandom > "${FILE}"
 
-CURL_WRITE='\nhttp_code=%{http_code} namelookup=%{time_namelookup} connect=%{time_connect} appconnect=%{time_appconnect} starttransfer=%{time_starttransfer} total=%{time_total} size_upload=%{size_upload} size_download=%{size_download}\n'
+CURL_JSON='{"time_namelookup":%{time_namelookup},"time_connect":%{time_connect},"time_appconnect":%{time_appconnect},"time_pretransfer":%{time_pretransfer},"time_starttransfer":%{time_starttransfer},"time_redirect":%{time_redirect},"time_total":%{time_total},"http_code":%{http_code}}'
+
+# Empty arrays are "unbound" under `set -u` on Bash 3.2 (macOS).
+curl_extra() {
+  curl -sS ${CURL_EXTRA[@]+"${CURL_EXTRA[@]}"} "$@"
+}
+
+submit_timings() {
+  local operation="$1"
+  local payload="$2"
+  local inner="${payload#\{}"
+  inner="${inner%\}}"
+  curl_extra \
+    -H 'Content-Type: application/json' \
+    --data "{\"operation\":\"${operation}\",\"name\":\"${NAME}\",${inner}}" \
+    "${BASE_URL}/api/results/timings" >/dev/null
+}
 
 echo "== upload ${NAME} (${SIZE} bytes) to ${BASE_URL}"
-curl -sS -D - -o /dev/null -w "${CURL_WRITE}" \
-  --upload-file "${FILE}" \
-  "${CURL_EXTRA[@]}" \
-  "${BASE_URL}/api/blobs/${NAME}"
+UPLOAD_TIMING="$(
+  curl_extra -o "${WORKDIR}/upload.json" -w "${CURL_JSON}" \
+    --upload-file "${FILE}" \
+    "${BASE_URL}/api/blobs/${NAME}"
+)"
+cat "${WORKDIR}/upload.json"
+echo
+echo "curl ${UPLOAD_TIMING}"
+submit_timings upload "${UPLOAD_TIMING}"
 
 echo "== download ${NAME} from ${BASE_URL}"
-curl -sS -D - -o "${WORKDIR}/download.bin" -w "${CURL_WRITE}" \
-  "${CURL_EXTRA[@]}" \
-  "${BASE_URL}/api/blobs/${NAME}"
+DOWNLOAD_TIMING="$(
+  curl_extra -o "${WORKDIR}/download.bin" -w "${CURL_JSON}" \
+    "${BASE_URL}/api/blobs/${NAME}"
+)"
+echo "curl ${DOWNLOAD_TIMING}"
+submit_timings download "${DOWNLOAD_TIMING}"
 
 echo "== info (does the pod see TLS?)"
-curl -sS "${CURL_EXTRA[@]}" "${BASE_URL}/api/info"
+curl_extra "${BASE_URL}/api/info"
 echo
