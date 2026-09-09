@@ -181,11 +181,11 @@ Use the same payload size across paths. Example columns:
 
 Data sources:
 
-- Web UI on the Route or port-forward URL
+- Web UI on the Route or port-forward URL (cipher, cert key, DNS, TCP, TLS handshake, TTFB, transfer)
 - `GET /api/results` (JSON)
-- `curl -w` timings from `scripts/vm-bench.sh`
+- `./scripts/vm-bench.sh` posts curl `-w` phases to `POST /api/results/timings`
 
-The **TLS** column in the UI means TLS **at the pod**, not at the client URL scheme alone.
+The **TLS** column in the UI means TLS **at the pod**, not at the client URL scheme alone. Edge Routes still show a client TLS handshake (terminated at the router).
 
 ## 9. Debug with network tools
 

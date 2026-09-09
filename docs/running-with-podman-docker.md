@@ -21,7 +21,7 @@ make test               # unit tests in a golang container if go is missing
 make run                # podman compose up --build
 ```
 
-Open http://127.0.0.1:8080/ for the dashboard. HTTPS: https://127.0.0.1:8443/ (`-k` for self-signed).
+Open the [dashboard](http://127.0.0.1:8080/) over HTTP. Use [HTTPS](https://127.0.0.1:8443/) with `-k` for self-signed certs.
 
 Stop:
 
@@ -112,7 +112,7 @@ Same flow as a future OpenShift Route test (point URL at localhost for Podman):
 ./scripts/vm-bench.sh https://127.0.0.1:8443 1048576 -k
 ```
 
-Refresh http://127.0.0.1:8080/ and compare rows (operation, TLS, total ms, MiB/s).
+Refresh the [dashboard](http://127.0.0.1:8080/) and compare rows (cipher, key, DNS, TCP, TLS handshake, TTFB, transfer, MiB/s).
 
 ## Exec into the container (like `oc exec`)
 

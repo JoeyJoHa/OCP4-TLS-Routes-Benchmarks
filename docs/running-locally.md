@@ -82,8 +82,15 @@ curl -sk -o /tmp/out-https.bin \
 
 ### 5. View results
 
-- Web UI: http://127.0.0.1:8080/
+- Web UI: <http://127.0.0.1:8080/>
 - API: `curl -sS http://127.0.0.1:8080/api/results | jq .`
+
+For DNS, TCP connect, TLS handshake, TTFB, and transfer phases (needed to compare ciphers and cert keys), use the wrapper instead of raw curl:
+
+```bash
+./scripts/vm-bench.sh http://127.0.0.1:8080 1048576
+./scripts/vm-bench.sh https://127.0.0.1:8443 1048576 -k
+```
 
 ## Payload sizes for tables
 

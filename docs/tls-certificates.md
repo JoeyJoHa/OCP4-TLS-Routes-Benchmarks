@@ -122,7 +122,7 @@ For each cert profile, run at 1 KiB, 1 MiB, and 10 MiB:
 3. Download HTTP  
 4. Download HTTPS  
 
-Record `total_ms` and `throughput_mib_s` from the UI or `/api/results`.
+Record `tls_handshake_ms`, `transfer_ms`, `total_ms`, and `throughput_mib_s` from the UI or `/api/results`. Handshake cost tracks cert key algorithm (RSA 2048/4096 vs ECDSA); transfer and throughput track the negotiated cipher.
 
 ## Auto-generated certs (no Secret)
 
