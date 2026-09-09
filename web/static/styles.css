@@ -24,7 +24,7 @@ html, body {
 }
 
 body {
-  max-width: 1200px;
+  max-width: 1680px;
   margin: 0 auto;
   padding: 1.5rem 1.25rem 3rem;
 }
@@ -175,6 +175,11 @@ tbody tr:nth-child(even) { background: var(--row-alt); }
 .badge-tls { background: var(--accent-dim); color: var(--accent); }
 .badge-http { background: #5a4316; color: var(--http); }
 .badge-op { background: #243044; color: var(--text); }
+
+.cipher {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
 
 @media (max-width: 800px) {
   .cards { grid-template-columns: 1fr; }

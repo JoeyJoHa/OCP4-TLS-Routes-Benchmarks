@@ -54,7 +54,7 @@
         </label>
       </div>
     </div>
-    <p class="muted" id="table-hint">Upload or download from a Linux VM or another pod; rows appear here from the PVC log.</p>
+    <p class="muted" id="table-hint">Use <code>./scripts/vm-bench.sh</code> so rows include DNS, TCP, TLS handshake, TTFB, and transfer. HTTPS also records server-side handshake time for cert key comparisons.</p>
     <div class="table-wrap">
       <table>
         <thead>
@@ -64,7 +64,13 @@
             <th>Blob</th>
             <th>Size</th>
             <th>TLS</th>
-            <th>Client</th>
+            <th>Cipher</th>
+            <th>Key</th>
+            <th title="curl time_namelookup">DNS ms</th>
+            <th title="TCP connect after DNS">TCP ms</th>
+            <th title="TLS handshake (client curl, else server)">TLS hs ms</th>
+            <th title="Time to first byte after the request is sent">TTFB ms</th>
+            <th title="Body transfer after first byte">Xfer ms</th>
             <th>Write ms</th>
             <th>Read ms</th>
             <th>Total ms</th>
@@ -72,7 +78,7 @@
           </tr>
         </thead>
         <tbody id="results-body">
-          <tr><td colspan="10" class="empty">No runs yet.</td></tr>
+          <tr><td colspan="17" class="empty">No runs yet.</td></tr>
         </tbody>
       </table>
     </div>

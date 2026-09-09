@@ -17,9 +17,22 @@ function formatTime(iso) {
   return iso.replace("T", " ").replace("Z", "Z");
 }
 
-function badgeTLS(isTLS) {
-  if (isTLS) return '<span class="badge badge-tls">TLS</span>';
-  return '<span class="badge badge-http">HTTP</span>';
+function badgeTLS(run) {
+  if (!run.tls) return '<span class="badge badge-http">HTTP</span>';
+  const label = run.tls_version || "TLS";
+  return `<span class="badge badge-tls">${label}</span>`;
+}
+
+function formatKey(algorithm, size, curve) {
+  if (!algorithm) return "—";
+  if (curve) return `${algorithm} ${curve}`;
+  if (size) return `${algorithm} ${size}`;
+  return algorithm;
+}
+
+function formatHandshake(run) {
+  if (run.tls_reused && !run.tls_handshake_ms) return "reused";
+  return formatMs(run.tls_handshake_ms);
 }
 
 async function fetchJSON(path) {
@@ -42,6 +55,7 @@ function renderConnection(info) {
     ["Host header", info.host],
     ["TLS version", info.tls_version || "none"],
     ["Cipher", info.cipher || "—"],
+    ["Key", formatKey(info.server_cert_key_algorithm, info.server_cert_key_size, info.server_cert_curve)],
     ["SNI", info.sni || "—"],
     ["X-Forwarded-Proto", info.x_forwarded_proto || "—"],
     ["X-Forwarded-For", info.x_forwarded_for || "—"],
@@ -79,7 +93,7 @@ function renderResults(runs) {
     return true;
   });
   if (filtered.length === 0) {
-    body.innerHTML = '<tr><td colspan="10" class="empty">No runs match the current filters.</td></tr>';
+    body.innerHTML = '<tr><td colspan="17" class="empty">No runs match the current filters.</td></tr>';
     return;
   }
   body.innerHTML = filtered
@@ -89,11 +103,17 @@ function renderResults(runs) {
         <td><span class="badge badge-op">${run.operation}</span></td>
         <td>${run.name}</td>
         <td>${formatBytes(run.bytes)}</td>
-        <td>${badgeTLS(run.tls)}</td>
-        <td>${run.client_addr || "—"}</td>
+        <td>${badgeTLS(run)}</td>
+        <td class="cipher">${run.cipher || "—"}</td>
+        <td>${formatKey(run.tls_key_algorithm, run.tls_key_size, run.tls_key_curve)}</td>
+        <td>${formatMs(run.dns_ms)}</td>
+        <td>${formatMs(run.tcp_connect_ms)}</td>
+        <td>${formatHandshake(run)}</td>
+        <td>${formatMs(run.ttfb_ms)}</td>
+        <td>${formatMs(run.transfer_ms)}</td>
         <td>${formatMs(run.write_ms)}</td>
         <td>${formatMs(run.read_ms)}</td>
-        <td>${formatMs(run.total_ms)}</td>
+        <td>${formatMs(run.client_total_ms || run.total_ms)}</td>
         <td>${run.throughput_mib_s ? Number(run.throughput_mib_s).toFixed(3) : "—"}</td>
       </tr>`
     )
