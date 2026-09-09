@@ -31,6 +31,18 @@
     </article>
   </section>
 
+  <section class="guide-panel">
+    <details open>
+      <summary>Metrics guide — what to look for</summary>
+      <div class="guide-grid" id="metrics-guide"></div>
+      <p class="guide-foot muted">
+        Color hints in the table are rough guides for same-cluster runs. WAN latency, RSA-4096, or cold PVC writes will shift “good” ranges.
+        Run handshake studies with
+        <code>./scripts/vm-bench.sh --handshake-only --http1.1 --repeat 30 --route-mode passthrough</code>.
+      </p>
+    </details>
+  </section>
+
   <section class="table-panel">
     <div class="table-head">
       <h2>Benchmark results</h2>
@@ -42,6 +54,7 @@
             <option value="generate">Generate</option>
             <option value="upload">Upload</option>
             <option value="download">Download</option>
+            <option value="handshake">Handshake</option>
           </select>
         </label>
         <label>
@@ -52,33 +65,47 @@
             <option value="false">No</option>
           </select>
         </label>
+        <label>
+          Route mode
+          <select id="filter-route">
+            <option value="">All</option>
+            <option value="edge">edge</option>
+            <option value="passthrough">passthrough</option>
+            <option value="reencrypt">reencrypt</option>
+            <option value="service-http">service-http</option>
+            <option value="service-https">service-https</option>
+          </select>
+        </label>
+        <label class="refresh-toggle">
+          <input type="checkbox" id="group-experiments" checked>
+          Collapse repeats
+        </label>
+        <button type="button" class="btn-secondary" id="column-picker-btn" aria-expanded="false" aria-controls="column-picker">
+          Columns
+        </button>
       </div>
     </div>
-    <p class="muted" id="table-hint">Use <code>./scripts/vm-bench.sh</code> so rows include DNS, TCP, TLS handshake, TTFB, and transfer. HTTPS also records server-side handshake time for cert key comparisons.</p>
+
+    <div id="column-picker" class="column-picker hidden" role="dialog" aria-label="Choose visible columns">
+      <div class="column-picker-head">
+        <strong>Visible columns</strong>
+        <button type="button" class="btn-link" id="column-reset">Reset defaults</button>
+      </div>
+      <div class="column-picker-grid" id="column-picker-options"></div>
+    </div>
+
+    <p class="muted" id="table-hint">
+      Repeated runs with the same <code>experiment_id</code> appear as one summary row. Click the row or ▶ to expand individual samples.
+      On <strong>reencrypt</strong> Routes, compare <strong>TLS hs cli</strong> (client→router) with <strong>TLS hs srv</strong> (router→pod).
+    </p>
+
     <div class="table-wrap">
       <table>
-        <thead>
-          <tr>
-            <th>Time (UTC)</th>
-            <th>Operation</th>
-            <th>Blob</th>
-            <th>Size</th>
-            <th>TLS</th>
-            <th>Cipher</th>
-            <th>Key</th>
-            <th title="curl time_namelookup">DNS ms</th>
-            <th title="TCP connect after DNS">TCP ms</th>
-            <th title="TLS handshake (client curl, else server)">TLS hs ms</th>
-            <th title="Time to first byte after the request is sent">TTFB ms</th>
-            <th title="Body transfer after first byte">Xfer ms</th>
-            <th>Write ms</th>
-            <th>Read ms</th>
-            <th>Total ms</th>
-            <th>MiB/s</th>
-          </tr>
+        <thead id="results-head">
+          <tr></tr>
         </thead>
         <tbody id="results-body">
-          <tr><td colspan="17" class="empty">No runs yet.</td></tr>
+          <tr><td colspan="20" class="empty">No runs yet.</td></tr>
         </tbody>
       </table>
     </div>
