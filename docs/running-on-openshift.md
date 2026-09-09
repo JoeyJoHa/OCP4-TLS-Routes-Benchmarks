@@ -135,6 +135,8 @@ oc port-forward -n tlsbench svc/tlsbench 8080:8080
 
 Open http://127.0.0.1:8080/
 
+Enable **Collapse repeats** to group handshake and bulk experiments by `experiment_id`. Filter by Route mode when runs were labeled with `--route-mode`.
+
 ## 6. In-cluster benchmarks (Service HTTP vs HTTPS)
 
 ```bash
@@ -181,11 +183,14 @@ Use the same payload size across paths. Example columns:
 
 Data sources:
 
-- Web UI on the Route or port-forward URL (cipher, cert key, DNS, TCP, TLS handshake, TTFB, transfer)
+- Web UI on the Route or port-forward URL — metrics guide, collapsible experiment groups, column picker; columns include cipher, cert key, Route mode, ALPN, TLS hs cli/srv, Xfer, MiB/s
 - `GET /api/results` (JSON)
-- `./scripts/vm-bench.sh` posts curl `-w` phases to `POST /api/results/timings`
+- `./scripts/vm-bench.sh` posts curl `-w` phases to `POST /api/results/timings` with `experiment_id`, `sample_index`, and `route_mode`
+- `./scripts/vm-bench.sh --handshake-only --route-mode edge|passthrough|reencrypt` for handshake percentiles
 
-The **TLS** column in the UI means TLS **at the pod**, not at the client URL scheme alone. Edge Routes still show a client TLS handshake (terminated at the router).
+Always pass `--route-mode` on OpenShift so dashboard filters match the path under test.
+
+See [TLS benchmark methodology](tls-benchmark-methodology.md) for valid comparison tables.
 
 ## 9. Debug with network tools
 

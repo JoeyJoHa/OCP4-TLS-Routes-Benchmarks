@@ -11,6 +11,8 @@ Use different **key algorithms and sizes** to measure how server certificate typ
 
 Cipher suite and TLS version are negotiated per connection; check `/api/info` for `tls_version` and `cipher`.
 
+For repeatable handshake and bulk comparison tables (percentiles, Route modes, `--http1.1`), see [TLS benchmark methodology](tls-benchmark-methodology.md).
+
 ## Generate cert sets (workstation)
 
 Use `scripts/gen-certs.sh`:
@@ -30,7 +32,7 @@ Examples:
 
 Output files:
 
-```
+```tree
 ca.crt      # CA certificate (for --cacert and reencrypt destinationCACertificate)
 ca.key      # CA private key (keep offline; not mounted in pod)
 tls.crt     # Server certificate
@@ -122,7 +124,9 @@ For each cert profile, run at 1 KiB, 1 MiB, and 10 MiB:
 3. Download HTTP  
 4. Download HTTPS  
 
-Record `tls_handshake_ms`, `transfer_ms`, `total_ms`, and `throughput_mib_s` from the UI or `/api/results`. Handshake cost tracks cert key algorithm (RSA 2048/4096 vs ECDSA); transfer and throughput track the negotiated cipher.
+Record `tls_handshake_ms`, `tls_handshake_server_ms`, `transfer_ms`, and `throughput_mib_s` from the UI or `/api/results`. Use `./scripts/vm-bench.sh --handshake-only --repeat 30` for cert key comparisons.
+
+**MiB/s:** upload throughput uses the client send interval (TTFB); download uses the response body transfer interval. Do not compare upload MiB/s from raw curl `-w` without this distinction — see [TLS benchmark methodology](tls-benchmark-methodology.md).
 
 ## Auto-generated certs (no Secret)
 

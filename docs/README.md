@@ -8,6 +8,7 @@ Step-by-step guides for running **OCP4 TLS Routes Benchmarks** in three environm
 | [Running with Podman/Docker](running-with-podman-docker.md) | You want to test the **same container image** before OpenShift (recommended pre-flight) |
 | [Running on OpenShift](running-on-openshift.md) | You deploy to a cluster with PVC, Service, Routes, and **TLS Secrets** |
 | [TLS certificates for benchmarks](tls-certificates.md) | You want RSA 2048/4096, ECDSA, or custom certs (volume locally, Secret on OpenShift) |
+| [TLS benchmark methodology](tls-benchmark-methodology.md) | Handshake vs bulk matrices, percentiles, and Route mode labeling |
 
 ## What you are measuring
 
@@ -16,6 +17,8 @@ Step-by-step guides for running **OCP4 TLS Routes Benchmarks** in three environm
 - **Download** (`GET`) — pod reads PVC and sends bytes; TLS encrypt on HTTPS
 
 Results appear in the Web UI (`/`) and in `GET /api/results` (JSONL on the PVC).
+
+The dashboard includes a **metrics guide** (good/caution/concern ranges), **collapsible experiment rows** (repeated `experiment_id` samples collapse to p50/p99), filters by operation/TLS/Route mode, and a **Columns** picker (saved in your browser).
 
 ## Quick comparison
 

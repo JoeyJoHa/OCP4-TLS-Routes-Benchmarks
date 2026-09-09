@@ -11,6 +11,7 @@ A Go HTTPS/HTTP target for OpenShift. Deploy it in-cluster, hit it through a **S
 | [Running with Podman/Docker](docs/running-with-podman-docker.md) | Container pre-flight before OpenShift |
 | [Running on OpenShift](docs/running-on-openshift.md) | PVC, Routes, Secrets |
 | [TLS certificates for benchmarks](docs/tls-certificates.md) | RSA 2048/4096, ECDSA; volumes vs Secrets |
+| [TLS benchmark methodology](docs/tls-benchmark-methodology.md) | Handshake vs bulk matrices, percentiles, Route modes |
 
 ## What you can measure
 
@@ -35,7 +36,7 @@ make test              # Go locally, or Podman golang image
 make run               # Go binary, or podman compose up --build
 ```
 
-Dashboard: <http://127.0.0.1:8080/>
+Dashboard: <http://127.0.0.1:8080/> — benchmark table with cipher, cert key, client/server TLS handshake, Route mode, ALPN, collapsible experiment groups, and a configurable column picker.
 
 For full benchmark steps, certificates, and OpenShift deployment, use the [docs](docs/README.md).
 
@@ -68,7 +69,8 @@ If `TLS_CERT_FILE` / `TLS_KEY_FILE` are missing, the process generates an intern
 | `GET` | `/ca.crt` | Trust anchor for VM `--cacert` |
 | `GET` | `/api/info` | TLS vs HTTP as seen by the pod |
 | `GET` | `/api/results` | JSONL-backed benchmark rows |
-| `POST` | `/api/results/timings` | Attach curl DNS/TCP/TLS/TTFB timings to the latest matching run |
+| `GET` | `/api/bench/probe?experiment_id=&sample_index=&route_mode=` | Record handshake sample + return connection info |
+| `POST` | `/api/results/timings` | Attach curl phases (`experiment_id`, `sample_index`, `route_mode`) |
 | `GET` | `/api/blobs` | List PVC files |
 | `POST` | `/api/blobs?name=&size=` | Generate urandom onto the PVC |
 | `PUT` | `/api/blobs/{name}` | Upload (curl `--upload-file`) |

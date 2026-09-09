@@ -110,9 +110,15 @@ Same flow as a future OpenShift Route test (point URL at localhost for Podman):
 ```bash
 ./scripts/vm-bench.sh http://127.0.0.1:8080 1048576
 ./scripts/vm-bench.sh https://127.0.0.1:8443 1048576 -k
+
+# Handshake percentiles (no blob I/O)
+./scripts/vm-bench.sh --handshake-only --http1.1 --repeat 30 --warmup 3 \
+  --route-mode service-https https://127.0.0.1:8443 0 -k
 ```
 
-Refresh the [dashboard](http://127.0.0.1:8080/) and compare rows (cipher, key, DNS, TCP, TLS handshake, TTFB, transfer, MiB/s).
+Refresh the [dashboard](http://127.0.0.1:8080/). Repeated runs with the same `experiment_id` appear as one collapsible summary row. Compare cipher, cert key, Route mode, client vs server TLS handshake, and MiB/s. Use **Columns** to trim the table; the metrics guide explains good/caution/concern ranges.
+
+Upload throughput uses the client send interval (curl pretransfer → starttransfer), not the tiny JSON response body — see [TLS benchmark methodology](tls-benchmark-methodology.md).
 
 ## Exec into the container (like `oc exec`)
 

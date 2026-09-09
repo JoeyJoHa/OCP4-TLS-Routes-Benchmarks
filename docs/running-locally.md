@@ -33,7 +33,7 @@ On first start, if `./certs/tls.crt` and `./certs/tls.key` are missing, the app 
 
 http://127.0.0.1:8080/
 
-The benchmark table fills after you run generate, upload, or download tests below.
+The benchmark table fills after you run generate, upload, or download tests below. Repeated runs with the same `experiment_id` collapse to one summary row (click ▶ to expand samples). Use **Columns** to hide noisy fields; the **metrics guide** explains TLS hs cli/srv, MiB/s, and color hints.
 
 ## Verify HTTP vs HTTPS at the pod
 
@@ -90,7 +90,29 @@ For DNS, TCP connect, TLS handshake, TTFB, and transfer phases (needed to compar
 ```bash
 ./scripts/vm-bench.sh http://127.0.0.1:8080 1048576
 ./scripts/vm-bench.sh https://127.0.0.1:8443 1048576 -k
+
+# Handshake-only percentiles (cert key comparison)
+./scripts/vm-bench.sh --handshake-only --http1.1 --route-mode service-https \
+  --repeat 30 --warmup 3 https://127.0.0.1:8443 0 -k
+
+# Repeated bulk upload with summary (512 KiB × 10)
+./scripts/vm-bench.sh --http1.1 --repeat 10 --warmup 3 --route-mode service-https \
+  https://127.0.0.1:8443 524288 -k
 ```
+
+### vm-bench options
+
+| Flag | Purpose |
+| --- | --- |
+| `--handshake-only` | `GET /api/bench/probe` only (no blob I/O) |
+| `--repeat N` | Samples after warmup (default 30 for handshake, 1 for blob) |
+| `--warmup N` | Discarded samples (default 3 when `--repeat > 1`) |
+| `--http1.1` | Pin ALPN to HTTP/1.1 |
+| `--reuse` | Keep-alive / session reuse (default: cold per sample) |
+| `--route-mode` | Label rows: `edge`, `passthrough`, `reencrypt`, `service-http`, `service-https` |
+| `--experiment-id` | Group samples in the dashboard |
+
+Upload **MiB/s** uses the send interval (TTFB); download **MiB/s** uses the response body transfer interval. See [TLS benchmark methodology](tls-benchmark-methodology.md) for full matrices.
 
 ## Payload sizes for tables
 
