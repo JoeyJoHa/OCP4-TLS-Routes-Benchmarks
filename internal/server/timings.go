@@ -10,8 +10,11 @@ import (
 )
 
 type clientTimingsRequest struct {
-	Operation string `json:"operation"`
-	Name      string `json:"name"`
+	Operation    string `json:"operation"`
+	Name         string `json:"name"`
+	RouteMode    string `json:"route_mode,omitempty"`
+	ExperimentID string `json:"experiment_id,omitempty"`
+	SampleIndex  int    `json:"sample_index,omitempty"`
 	timing.CurlTimes
 }
 
@@ -21,11 +24,24 @@ func (a *App) attachClientTimings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	if !validTimingOperation(req.Operation) || req.Name == "" {
-		writeError(w, http.StatusBadRequest, "operation and name are required")
+	if !validTimingOperation(req.Operation) {
+		writeError(w, http.StatusBadRequest, "invalid operation")
 		return
 	}
-	run, err := a.log.MergeClientTimings(req.Name, req.Operation, timing.PhasesFromCurl(req.CurlTimes))
+	meta := results.ClientTimingMeta{
+		RouteMode:    req.RouteMode,
+		ExperimentID: req.ExperimentID,
+		SampleIndex:  req.SampleIndex,
+	}
+	name := req.Name
+	if meta.ExperimentID != "" && meta.SampleIndex > 0 {
+		name = probeName(meta.ExperimentID, meta.SampleIndex)
+	}
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "name or experiment_id with sample_index is required")
+		return
+	}
+	run, err := a.log.MergeClientTimings(name, req.Operation, timing.PhasesFromCurl(req.CurlTimes), meta)
 	if err != nil {
 		if errors.Is(err, results.ErrNoMatchingRun) {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -39,7 +55,7 @@ func (a *App) attachClientTimings(w http.ResponseWriter, r *http.Request) {
 
 func validTimingOperation(operation string) bool {
 	switch operation {
-	case "generate", "upload", "download":
+	case "generate", "upload", "download", "handshake":
 		return true
 	default:
 		return false

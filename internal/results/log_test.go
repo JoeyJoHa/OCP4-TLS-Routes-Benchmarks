@@ -63,7 +63,7 @@ func TestMergeClientTimingsUpdatesNewestMatch(t *testing.T) {
 		TTFBMs:         5,
 		TransferMs:     80,
 		ClientTotalMs:  90,
-	})
+	}, ClientTimingMeta{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,9 +87,68 @@ func TestMergeClientTimingsMissingRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = logger.MergeClientTimings("missing.bin", "upload", timing.Phases{})
+	_, err = logger.MergeClientTimings("missing.bin", "upload", timing.Phases{}, ClientTimingMeta{})
 	if !errors.Is(err, ErrNoMatchingRun) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestMergeClientTimingsByExperimentID(t *testing.T) {
+	logger, err := NewLogger(filepath.Join(t.TempDir(), "runs.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append(Run{
+		Operation:            "handshake",
+		Name:                 "exp1-2",
+		ExperimentID:         "exp1",
+		SampleIndex:          2,
+		TLSHandshakeServerMs: 11,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := logger.MergeClientTimings("", "handshake", timing.Phases{
+		TLSHandshakeMs: 22,
+		ClientTotalMs:  25,
+	}, ClientTimingMeta{ExperimentID: "exp1", SampleIndex: 2, RouteMode: "passthrough"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.TLSHandshakeMs != 22 || updated.TLSHandshakeServerMs != 11 || updated.RouteMode != "passthrough" {
+		t.Fatalf("updated=%+v", updated)
+	}
+}
+
+func TestThroughputDownloadUsesTransferMs(t *testing.T) {
+	run := Run{
+		Operation:  "download",
+		Bytes:      1048576,
+		TotalMs:    1000,
+		TransferMs: 100,
+	}
+	got := throughput(run)
+	want := float64(1048576) / bytesPerMiB / 0.1
+	if got != want {
+		t.Fatalf("throughput=%v want %v", got, want)
+	}
+}
+
+func TestThroughputUploadUsesTTFBNotResponseBody(t *testing.T) {
+	run := Run{
+		Operation:     "upload",
+		Bytes:         1048576,
+		TotalMs:       1000,
+		TTFBMs:        50,
+		TransferMs:    0.2,
+		ClientTotalMs: 63,
+	}
+	got := throughput(run)
+	want := float64(1048576) / bytesPerMiB / 0.05
+	if got != want {
+		t.Fatalf("throughput=%v want %v", got, want)
+	}
+	if got > 1000 {
+		t.Fatalf("upload throughput inflated by response body transfer_ms: %v", got)
 	}
 }
 

@@ -47,6 +47,17 @@ type Run struct {
 	TTFBMs               float64   `json:"ttfb_ms,omitempty"`
 	TransferMs           float64   `json:"transfer_ms,omitempty"`
 	ClientTotalMs        float64   `json:"client_total_ms,omitempty"`
+	ALPN                 string    `json:"alpn,omitempty"`
+	RouteMode            string    `json:"route_mode,omitempty"`
+	ExperimentID         string    `json:"experiment_id,omitempty"`
+	SampleIndex          int       `json:"sample_index,omitempty"`
+}
+
+// ClientTimingMeta is optional metadata posted with curl phase timings.
+type ClientTimingMeta struct {
+	RouteMode    string
+	ExperimentID string
+	SampleIndex  int
 }
 
 // Logger appends JSON lines to RESULTS_LOG on the PVC.
@@ -66,14 +77,14 @@ func (l *Logger) Append(run Run) error {
 	if run.Timestamp.IsZero() {
 		run.Timestamp = time.Now().UTC()
 	}
-	run.ThroughputMiBs = throughput(run.Bytes, run.TotalMs)
+	run.ThroughputMiBs = throughput(run)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.appendUnlocked(run)
 }
 
 // MergeClientTimings attaches curl phase timings to the newest matching run.
-func (l *Logger) MergeClientTimings(name, operation string, phases timing.Phases) (Run, error) {
+func (l *Logger) MergeClientTimings(name, operation string, phases timing.Phases, meta ClientTimingMeta) (Run, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -81,25 +92,13 @@ func (l *Logger) MergeClientTimings(name, operation string, phases timing.Phases
 	if err != nil {
 		return Run{}, err
 	}
-	idx := -1
-	for i, run := range runs {
-		if run.Name == name && run.Operation == operation {
-			idx = i
-		}
-	}
+	idx := findMergeIndex(runs, name, operation, meta)
 	if idx < 0 {
 		return Run{}, ErrNoMatchingRun
 	}
-	runs[idx].DNSMs = phases.DNSMs
-	runs[idx].TCPConnectMs = phases.TCPConnectMs
-	runs[idx].RedirectMs = phases.RedirectMs
-	runs[idx].TTFBMs = phases.TTFBMs
-	runs[idx].TransferMs = phases.TransferMs
-	runs[idx].ClientTotalMs = phases.ClientTotalMs
-	if phases.TLSHandshakeMs > 0 {
-		runs[idx].TLSHandshakeMs = phases.TLSHandshakeMs
-		runs[idx].TLSReused = false
-	}
+	applyClientPhases(&runs[idx], phases)
+	applyClientMeta(&runs[idx], meta)
+	runs[idx].ThroughputMiBs = throughput(runs[idx])
 	if err := l.rewriteUnlocked(runs); err != nil {
 		return Run{}, err
 	}
@@ -199,12 +198,85 @@ func (l *Logger) rewriteUnlocked(runs []Run) error {
 	return os.Rename(tmp, l.path)
 }
 
-func throughput(bytes int64, totalMs float64) float64 {
-	if totalMs <= 0 || bytes <= 0 {
+func throughput(run Run) float64 {
+	if run.Bytes <= 0 {
 		return 0
 	}
-	seconds := totalMs / 1000.0
-	return float64(bytes) / bytesPerMiB / seconds
+	durationMs := bulkDurationMs(run)
+	if durationMs <= 0 {
+		return 0
+	}
+	seconds := durationMs / 1000.0
+	return float64(run.Bytes) / bytesPerMiB / seconds
+}
+
+// bulkDurationMs picks the client interval that actually moved the blob bytes.
+// curl transfer_ms (total − starttransfer) is the download response body; on PUT
+// uploads the payload is sent before starttransfer, so use ttfb_ms instead.
+func bulkDurationMs(run Run) float64 {
+	switch run.Operation {
+	case "upload":
+		if run.TTFBMs > 0 {
+			return run.TTFBMs
+		}
+	case "download":
+		if run.TransferMs > 0 {
+			return run.TransferMs
+		}
+	default:
+		if run.TransferMs > 0 {
+			return run.TransferMs
+		}
+	}
+	if run.ClientTotalMs > 0 {
+		return run.ClientTotalMs
+	}
+	return run.TotalMs
+}
+
+func findMergeIndex(runs []Run, name, operation string, meta ClientTimingMeta) int {
+	idx := -1
+	for i, run := range runs {
+		if run.Operation != operation {
+			continue
+		}
+		if meta.ExperimentID != "" {
+			if run.ExperimentID != meta.ExperimentID || run.SampleIndex != meta.SampleIndex {
+				continue
+			}
+			idx = i
+			continue
+		}
+		if run.Name == name {
+			idx = i
+		}
+	}
+	return idx
+}
+
+func applyClientPhases(run *Run, phases timing.Phases) {
+	run.DNSMs = phases.DNSMs
+	run.TCPConnectMs = phases.TCPConnectMs
+	run.RedirectMs = phases.RedirectMs
+	run.TTFBMs = phases.TTFBMs
+	run.TransferMs = phases.TransferMs
+	run.ClientTotalMs = phases.ClientTotalMs
+	if phases.TLSHandshakeMs > 0 {
+		run.TLSHandshakeMs = phases.TLSHandshakeMs
+		run.TLSReused = false
+	}
+}
+
+func applyClientMeta(run *Run, meta ClientTimingMeta) {
+	if meta.RouteMode != "" {
+		run.RouteMode = meta.RouteMode
+	}
+	if meta.ExperimentID != "" {
+		run.ExperimentID = meta.ExperimentID
+	}
+	if meta.SampleIndex > 0 {
+		run.SampleIndex = meta.SampleIndex
+	}
 }
 
 func reverse(runs []Run) {

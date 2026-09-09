@@ -59,6 +59,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/info", a.apiInfo)
 	mux.HandleFunc("GET /api/results", a.apiResults)
 	mux.HandleFunc("POST /api/results/timings", a.attachClientTimings)
+	mux.HandleFunc("GET /api/bench/probe", a.benchProbe)
 	mux.HandleFunc("GET /api/blobs", a.listBlobs)
 	mux.HandleFunc("POST /api/blobs", a.generateBlob)
 	mux.HandleFunc("GET /api/blobs/{name}", a.downloadBlob)
@@ -215,13 +216,12 @@ func (a *App) uploadBlob(w http.ResponseWriter, r *http.Request) {
 		writeBlobError(w, err)
 		return
 	}
-	total := msSince(started)
 	a.record(r, results.Run{
 		Operation: "upload",
 		Name:      info.Name,
 		Bytes:     info.Bytes,
 		WriteMs:   info.WriteMs,
-		TotalMs:   total,
+		TotalMs:   msSince(started),
 	})
 	writeJSON(w, http.StatusOK, info)
 }
@@ -269,6 +269,8 @@ func (a *App) record(r *http.Request, run results.Run) {
 	run.ClientAddr = info.ClientAddr
 	run.TLSVersion = info.TLSVersion
 	run.Cipher = info.Cipher
+	run.ALPN = info.ALPN
+	applyBenchHeaders(r, &run)
 	if info.TLS {
 		run.TLSKeyAlgorithm = info.CertKeyAlgorithm
 		run.TLSKeySize = info.CertKeySize
@@ -277,12 +279,28 @@ func (a *App) record(r *http.Request, run results.Run) {
 	if handshakeMs, reused := tlslisten.FromContext(r.Context()).ConsumeHandshake(); handshakeMs > 0 || reused {
 		run.TLSReused = reused
 		if handshakeMs > 0 {
-			run.TLSHandshakeMs = handshakeMs
+			if run.TLSHandshakeMs == 0 {
+				run.TLSHandshakeMs = handshakeMs
+			}
 			run.TLSHandshakeServerMs = handshakeMs
 		}
 	}
 	if err := a.log.Append(run); err != nil {
 		log.Printf("results log: %v", err)
+	}
+}
+
+func applyBenchHeaders(r *http.Request, run *results.Run) {
+	if v := r.Header.Get("X-Route-Mode"); v != "" {
+		run.RouteMode = v
+	}
+	if v := r.Header.Get("X-Experiment-Id"); v != "" {
+		run.ExperimentID = v
+	}
+	if v := r.Header.Get("X-Sample-Index"); v != "" {
+		if idx, err := strconv.Atoi(v); err == nil && idx > 0 {
+			run.SampleIndex = idx
+		}
 	}
 }
 

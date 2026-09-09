@@ -279,6 +279,70 @@ func TestAttachClientTimingsRequiresExistingRun(t *testing.T) {
 	}
 }
 
+func TestBenchProbeAndExperimentMerge(t *testing.T) {
+	app := newTestApp(t)
+	srv := httptest.NewTLSServer(app.Handler())
+	t.Cleanup(srv.Close)
+
+	probeURL := srv.URL + "/api/bench/probe?experiment_id=exp1&sample_index=1&route_mode=passthrough"
+	resp, err := srv.Client().Get(probeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("probe=%d %s", resp.StatusCode, body)
+	}
+
+	body := bytes.NewBufferString(`{
+		"operation":"handshake",
+		"experiment_id":"exp1",
+		"sample_index":1,
+		"route_mode":"passthrough",
+		"time_namelookup":0.001,
+		"time_connect":0.004,
+		"time_appconnect":0.054,
+		"time_pretransfer":0.055,
+		"time_starttransfer":0.060,
+		"time_total":0.060
+	}`)
+	timingResp, err := srv.Client().Post(srv.URL+"/api/results/timings", "application/json", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer timingResp.Body.Close()
+	if timingResp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(timingResp.Body)
+		t.Fatalf("timings=%d %s", timingResp.StatusCode, raw)
+	}
+
+	resultsResp, err := srv.Client().Get(srv.URL + "/api/results")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resultsResp.Body.Close()
+	var payloadJSON struct {
+		Runs []results.Run `json:"runs"`
+	}
+	if err := json.NewDecoder(resultsResp.Body).Decode(&payloadJSON); err != nil {
+		t.Fatal(err)
+	}
+	if len(payloadJSON.Runs) != 1 {
+		t.Fatalf("len=%d", len(payloadJSON.Runs))
+	}
+	run := payloadJSON.Runs[0]
+	if run.Operation != "handshake" || run.ExperimentID != "exp1" || run.SampleIndex != 1 {
+		t.Fatalf("run=%+v", run)
+	}
+	if run.TLSHandshakeMs != 50 {
+		t.Fatalf("client handshake=%+v", run)
+	}
+	if run.RouteMode != "passthrough" {
+		t.Fatalf("route_mode=%q", run.RouteMode)
+	}
+}
+
 func TestRejectsInvalidBlobName(t *testing.T) {
 	app := newTestApp(t)
 	srv := httptest.NewServer(app.Handler())
