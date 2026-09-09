@@ -67,6 +67,7 @@ func ServerTLSConfig(material Material, clientCAs *x509.CertPool) *tls.Config {
 	cfg := &tls.Config{
 		MinVersion:   tls.VersionTLS12,
 		Certificates: []tls.Certificate{material.Certificate},
+		NextProtos:   []string{"h2", "http/1.1"},
 	}
 	if clientCAs != nil {
 		cfg.ClientCAs = clientCAs
