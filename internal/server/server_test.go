@@ -68,6 +68,15 @@ func TestHealthAndInfoHTTPVsTLS(t *testing.T) {
 	if tlsInfo["tls"] != true {
 		t.Fatalf("HTTPS should report pod TLS: %v", tlsInfo)
 	}
+	if tlsInfo["server_cert_key_algorithm"] != "ECDSA" {
+		t.Fatalf("expected ECDSA server key, got %v", tlsInfo["server_cert_key_algorithm"])
+	}
+	if tlsInfo["server_cert_key_size"] != float64(256) {
+		t.Fatalf("expected 256-bit key, got %v", tlsInfo["server_cert_key_size"])
+	}
+	if tlsInfo["cipher"] == nil || tlsInfo["cipher"] == "" {
+		t.Fatalf("HTTPS should report cipher: %v", tlsInfo)
+	}
 }
 
 func TestBlobGenerateUploadDownloadAndResults(t *testing.T) {
@@ -129,6 +138,14 @@ func TestBlobGenerateUploadDownloadAndResults(t *testing.T) {
 	if len(payloadJSON.Runs) < 3 {
 		t.Fatalf("expected generate+upload+download rows, got %d", len(payloadJSON.Runs))
 	}
+	for _, run := range payloadJSON.Runs {
+		if run.TLS {
+			t.Fatalf("HTTP server run should not set TLS: %+v", run)
+		}
+		if run.TLSKeyAlgorithm != "" || run.Cipher != "" {
+			t.Fatalf("HTTP run should omit TLS key and cipher: %+v", run)
+		}
+	}
 
 	ca, err := client.Get(srv.URL + "/ca.crt")
 	if err != nil {
@@ -138,6 +155,127 @@ func TestBlobGenerateUploadDownloadAndResults(t *testing.T) {
 	pem, _ := io.ReadAll(ca.Body)
 	if !bytes.Contains(pem, []byte("BEGIN CERTIFICATE")) {
 		t.Fatal("ca.crt missing PEM")
+	}
+}
+
+func TestTLSUploadRecordsCipherAndKey(t *testing.T) {
+	app := newTestApp(t)
+	srv := httptest.NewTLSServer(app.Handler())
+	t.Cleanup(srv.Close)
+
+	payload := bytes.Repeat([]byte("t"), 1024)
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/blobs/tls-upload.bin", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.ContentLength = int64(len(payload))
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("upload=%d %s", resp.StatusCode, body)
+	}
+
+	resultsResp, err := srv.Client().Get(srv.URL + "/api/results")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resultsResp.Body.Close()
+	var payloadJSON struct {
+		Runs []results.Run `json:"runs"`
+	}
+	if err := json.NewDecoder(resultsResp.Body).Decode(&payloadJSON); err != nil {
+		t.Fatal(err)
+	}
+	if len(payloadJSON.Runs) != 1 {
+		t.Fatalf("expected 1 run, got %d", len(payloadJSON.Runs))
+	}
+	run := payloadJSON.Runs[0]
+	if !run.TLS {
+		t.Fatalf("expected TLS run: %+v", run)
+	}
+	if run.Cipher == "" {
+		t.Fatalf("expected cipher: %+v", run)
+	}
+	if run.TLSKeyAlgorithm != "ECDSA" || run.TLSKeySize != 256 || run.TLSKeyCurve != "P-256" {
+		t.Fatalf("expected ECDSA P-256, got %+v", run)
+	}
+}
+
+func TestAttachClientTimingsMergesCurlPhases(t *testing.T) {
+	app := newTestApp(t)
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+
+	payload := bytes.Repeat([]byte("t"), 512)
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/blobs/timed.bin", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.ContentLength = int64(len(payload))
+	putResp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer putResp.Body.Close()
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("upload=%d", putResp.StatusCode)
+	}
+
+	body := bytes.NewBufferString(`{
+		"operation":"upload",
+		"name":"timed.bin",
+		"time_namelookup":0.001,
+		"time_connect":0.004,
+		"time_appconnect":0.054,
+		"time_pretransfer":0.055,
+		"time_starttransfer":0.060,
+		"time_total":0.160
+	}`)
+	timingResp, err := srv.Client().Post(srv.URL+"/api/results/timings", "application/json", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer timingResp.Body.Close()
+	if timingResp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(timingResp.Body)
+		t.Fatalf("timings=%d %s", timingResp.StatusCode, raw)
+	}
+
+	resultsResp, err := srv.Client().Get(srv.URL + "/api/results")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resultsResp.Body.Close()
+	var payloadJSON struct {
+		Runs []results.Run `json:"runs"`
+	}
+	if err := json.NewDecoder(resultsResp.Body).Decode(&payloadJSON); err != nil {
+		t.Fatal(err)
+	}
+	if len(payloadJSON.Runs) != 1 {
+		t.Fatalf("len=%d", len(payloadJSON.Runs))
+	}
+	run := payloadJSON.Runs[0]
+	if run.DNSMs != 1 || run.TCPConnectMs != 3 || run.TLSHandshakeMs != 50 || run.TTFBMs != 5 || run.TransferMs != 100 {
+		t.Fatalf("phases=%+v", run)
+	}
+}
+
+func TestAttachClientTimingsRequiresExistingRun(t *testing.T) {
+	app := newTestApp(t)
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+	resp, err := srv.Client().Post(srv.URL+"/api/results/timings", "application/json", bytes.NewBufferString(`{"operation":"upload","name":"missing.bin","time_total":0.1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status=%d", resp.StatusCode)
 	}
 }
 

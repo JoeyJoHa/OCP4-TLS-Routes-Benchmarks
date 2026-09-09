@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -18,6 +19,7 @@ import (
 	"github.com/JoeyJoHa/OCP4-TLS-Routes-Benchmarks/internal/config"
 	"github.com/JoeyJoHa/OCP4-TLS-Routes-Benchmarks/internal/requestinfo"
 	"github.com/JoeyJoHa/OCP4-TLS-Routes-Benchmarks/internal/results"
+	"github.com/JoeyJoHa/OCP4-TLS-Routes-Benchmarks/internal/tlslisten"
 	"github.com/JoeyJoHa/OCP4-TLS-Routes-Benchmarks/web"
 )
 
@@ -28,6 +30,7 @@ type App struct {
 	log      *results.Logger
 	material certs.Material
 	hostname string
+	tracker  *tlslisten.Tracker
 	ready    atomic.Bool
 }
 
@@ -42,6 +45,7 @@ func New(cfg config.Config, store *blobs.Store, logger *results.Logger, material
 		log:      logger,
 		material: material,
 		hostname: host,
+		tracker:  tlslisten.NewTracker(),
 	}
 	app.ready.Store(true)
 	return app
@@ -54,6 +58,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /ca.crt", a.serveCA)
 	mux.HandleFunc("GET /api/info", a.apiInfo)
 	mux.HandleFunc("GET /api/results", a.apiResults)
+	mux.HandleFunc("POST /api/results/timings", a.attachClientTimings)
 	mux.HandleFunc("GET /api/blobs", a.listBlobs)
 	mux.HandleFunc("POST /api/blobs", a.generateBlob)
 	mux.HandleFunc("GET /api/blobs/{name}", a.downloadBlob)
@@ -71,14 +76,21 @@ func (a *App) Handler() http.Handler {
 
 func (a *App) ListenAndServe(ctx context.Context) error {
 	handler := a.Handler()
-	httpSrv := newHTTPServer(a.cfg.HTTPAddr, handler)
-	httpsSrv := newHTTPServer(a.cfg.HTTPSAddr, handler)
+	httpSrv := a.newHTTPServer(a.cfg.HTTPAddr, handler)
+	httpsSrv := a.newHTTPServer(a.cfg.HTTPSAddr, handler)
 
 	clientCAs, err := certs.LoadClientCAs(a.cfg.TLSClientCAFile)
 	if err != nil {
 		return err
 	}
-	httpsSrv.TLSConfig = certs.ServerTLSConfig(a.material, clientCAs)
+	tlsCfg := certs.ServerTLSConfig(a.material, clientCAs)
+	httpsSrv.TLSConfig = tlsCfg
+
+	httpsLn, err := net.Listen("tcp", a.cfg.HTTPSAddr)
+	if err != nil {
+		return fmt.Errorf("https listen: %w", err)
+	}
+	httpsLn = tlslisten.New(httpsLn, tlsCfg, a.tracker)
 
 	errCh := make(chan error, 2)
 	go func() {
@@ -88,8 +100,8 @@ func (a *App) ListenAndServe(ctx context.Context) error {
 		}
 	}()
 	go func() {
-		log.Printf("HTTPS listening on %s", a.cfg.HTTPSAddr)
-		if err := httpsSrv.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Printf("HTTPS listening on %s", httpsLn.Addr())
+		if err := httpsSrv.Serve(httpsLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("https: %w", err)
 		}
 	}()
@@ -106,11 +118,13 @@ func (a *App) ListenAndServe(ctx context.Context) error {
 	}
 }
 
-func newHTTPServer(addr string, handler http.Handler) *http.Server {
+func (a *App) newHTTPServer(addr string, handler http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: time.Duration(config.ReadHeaderTimeoutSecs) * time.Second,
+		ConnContext:       a.tracker.ConnContext,
+		ConnState:         a.tracker.ConnState,
 	}
 }
 
@@ -255,6 +269,18 @@ func (a *App) record(r *http.Request, run results.Run) {
 	run.ClientAddr = info.ClientAddr
 	run.TLSVersion = info.TLSVersion
 	run.Cipher = info.Cipher
+	if info.TLS {
+		run.TLSKeyAlgorithm = info.CertKeyAlgorithm
+		run.TLSKeySize = info.CertKeySize
+		run.TLSKeyCurve = info.CertKeyCurve
+	}
+	if handshakeMs, reused := tlslisten.FromContext(r.Context()).ConsumeHandshake(); handshakeMs > 0 || reused {
+		run.TLSReused = reused
+		if handshakeMs > 0 {
+			run.TLSHandshakeMs = handshakeMs
+			run.TLSHandshakeServerMs = handshakeMs
+		}
+	}
 	if err := a.log.Append(run); err != nil {
 		log.Printf("results log: %v", err)
 	}
