@@ -9,8 +9,8 @@ import (
 
 func (a *App) benchProbe(w http.ResponseWriter, r *http.Request) {
 	experimentID := r.URL.Query().Get("experiment_id")
-	if experimentID == "" {
-		writeError(w, http.StatusBadRequest, "experiment_id is required")
+	if !validExperimentID(experimentID) {
+		writeError(w, http.StatusBadRequest, "invalid experiment_id")
 		return
 	}
 	sampleIndex, err := strconv.Atoi(r.URL.Query().Get("sample_index"))
@@ -18,12 +18,17 @@ func (a *App) benchProbe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "sample_index must be a positive integer")
 		return
 	}
+	routeMode, ok := parseRouteMode(r.URL.Query().Get("route_mode"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid route_mode")
+		return
+	}
 	run := results.Run{
 		Operation:    "handshake",
 		Name:         probeName(experimentID, sampleIndex),
 		ExperimentID: experimentID,
 		SampleIndex:  sampleIndex,
-		RouteMode:    r.URL.Query().Get("route_mode"),
+		RouteMode:    routeMode,
 	}
 	a.record(r, run)
 	a.apiInfo(w, r)

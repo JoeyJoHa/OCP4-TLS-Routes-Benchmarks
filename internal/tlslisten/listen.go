@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	appconfig "github.com/JoeyJoHa/OCP4-TLS-Routes-Benchmarks/internal/config"
 )
 
 type ctxKey struct{}
@@ -51,7 +53,11 @@ func (t *Tracker) ConnContext(ctx context.Context, conn net.Conn) context.Contex
 	if !ok {
 		return ctx
 	}
-	return context.WithValue(ctx, ctxKey{}, value.(*Meta))
+	meta, ok := value.(*Meta)
+	if !ok {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKey{}, meta)
 }
 
 func (t *Tracker) ConnState(conn net.Conn, state http.ConnState) {
@@ -79,7 +85,7 @@ type listener struct {
 func New(inner net.Listener, config *tls.Config, tracker *Tracker) net.Listener {
 	cloned := config.Clone()
 	if len(cloned.NextProtos) == 0 {
-		cloned.NextProtos = []string{"h2", "http/1.1"}
+		cloned.NextProtos = append([]string(nil), appconfig.DefaultTLSNextProtos...)
 	}
 	return &listener{Listener: inner, config: cloned, tracker: tracker}
 }

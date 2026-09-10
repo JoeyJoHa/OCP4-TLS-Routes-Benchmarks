@@ -42,9 +42,18 @@ func newTestApp(t *testing.T) *App {
 	return New(cfg, store, logger, material)
 }
 
+func mustHandler(t *testing.T, app *App) http.Handler {
+	t.Helper()
+	handler, err := app.Handler()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handler
+}
+
 func TestHealthAndInfoHTTPVsTLS(t *testing.T) {
 	app := newTestApp(t)
-	plain := httptest.NewServer(app.Handler())
+	plain := httptest.NewServer(mustHandler(t, app))
 	t.Cleanup(plain.Close)
 
 	resp, err := http.Get(plain.URL + "/healthz")
@@ -61,7 +70,7 @@ func TestHealthAndInfoHTTPVsTLS(t *testing.T) {
 		t.Fatalf("plain HTTP should not report pod TLS: %v", info)
 	}
 
-	tlsServer := httptest.NewTLSServer(app.Handler())
+	tlsServer := httptest.NewTLSServer(mustHandler(t, app))
 	t.Cleanup(tlsServer.Close)
 
 	tlsInfo := getInfo(t, tlsServer.Client(), tlsServer.URL+"/api/info")
@@ -81,7 +90,7 @@ func TestHealthAndInfoHTTPVsTLS(t *testing.T) {
 
 func TestBlobGenerateUploadDownloadAndResults(t *testing.T) {
 	app := newTestApp(t)
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(mustHandler(t, app))
 	t.Cleanup(srv.Close)
 	client := srv.Client()
 
@@ -160,7 +169,7 @@ func TestBlobGenerateUploadDownloadAndResults(t *testing.T) {
 
 func TestTLSUploadRecordsCipherAndKey(t *testing.T) {
 	app := newTestApp(t)
-	srv := httptest.NewTLSServer(app.Handler())
+	srv := httptest.NewTLSServer(mustHandler(t, app))
 	t.Cleanup(srv.Close)
 
 	payload := bytes.Repeat([]byte("t"), 1024)
@@ -207,7 +216,7 @@ func TestTLSUploadRecordsCipherAndKey(t *testing.T) {
 
 func TestAttachClientTimingsMergesCurlPhases(t *testing.T) {
 	app := newTestApp(t)
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(mustHandler(t, app))
 	t.Cleanup(srv.Close)
 
 	payload := bytes.Repeat([]byte("t"), 512)
@@ -267,7 +276,7 @@ func TestAttachClientTimingsMergesCurlPhases(t *testing.T) {
 
 func TestAttachClientTimingsRequiresExistingRun(t *testing.T) {
 	app := newTestApp(t)
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(mustHandler(t, app))
 	t.Cleanup(srv.Close)
 	resp, err := srv.Client().Post(srv.URL+"/api/results/timings", "application/json", bytes.NewBufferString(`{"operation":"upload","name":"missing.bin","time_total":0.1}`))
 	if err != nil {
@@ -281,7 +290,7 @@ func TestAttachClientTimingsRequiresExistingRun(t *testing.T) {
 
 func TestBenchProbeAndExperimentMerge(t *testing.T) {
 	app := newTestApp(t)
-	srv := httptest.NewTLSServer(app.Handler())
+	srv := httptest.NewTLSServer(mustHandler(t, app))
 	t.Cleanup(srv.Close)
 
 	probeURL := srv.URL + "/api/bench/probe?experiment_id=exp1&sample_index=1&route_mode=passthrough"
@@ -345,7 +354,7 @@ func TestBenchProbeAndExperimentMerge(t *testing.T) {
 
 func TestRejectsInvalidBlobName(t *testing.T) {
 	app := newTestApp(t)
-	srv := httptest.NewServer(app.Handler())
+	srv := httptest.NewServer(mustHandler(t, app))
 	t.Cleanup(srv.Close)
 	resp, err := srv.Client().Post(srv.URL+"/api/blobs?name=../secret&size=8", "", nil)
 	if err != nil {
@@ -353,6 +362,47 @@ func TestRejectsInvalidBlobName(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+}
+
+func TestBenchProbeRejectsInvalidMetadata(t *testing.T) {
+	app := newTestApp(t)
+	srv := httptest.NewServer(mustHandler(t, app))
+	t.Cleanup(srv.Close)
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{name: "missing id", url: "/api/bench/probe?sample_index=1"},
+		{name: "html id", url: "/api/bench/probe?experiment_id=%3Cscript%3E&sample_index=1"},
+		{name: "bad route", url: "/api/bench/probe?experiment_id=exp1&sample_index=1&route_mode=ftp"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp, err := srv.Client().Get(srv.URL + tt.url)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status=%d", resp.StatusCode)
+			}
+		})
+	}
+}
+
+func TestAttachClientTimingsRejectsOversizedJSON(t *testing.T) {
+	app := newTestApp(t)
+	srv := httptest.NewServer(mustHandler(t, app))
+	t.Cleanup(srv.Close)
+	body := bytes.Repeat([]byte("n"), config.MaxJSONBodyBytes+1)
+	resp, err := srv.Client().Post(srv.URL+"/api/results/timings", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge && resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d", resp.StatusCode)
 	}
 }

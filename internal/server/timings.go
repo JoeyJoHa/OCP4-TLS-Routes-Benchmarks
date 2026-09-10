@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/JoeyJoHa/OCP4-TLS-Routes-Benchmarks/internal/config"
 	"github.com/JoeyJoHa/OCP4-TLS-Routes-Benchmarks/internal/results"
 	"github.com/JoeyJoHa/OCP4-TLS-Routes-Benchmarks/internal/timing"
 )
@@ -20,7 +21,13 @@ type clientTimingsRequest struct {
 
 func (a *App) attachClientTimings(w http.ResponseWriter, r *http.Request) {
 	var req clientTimingsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	limited := http.MaxBytesReader(w, r.Body, config.MaxJSONBodyBytes)
+	if err := json.NewDecoder(limited).Decode(&req); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			writeError(w, http.StatusRequestEntityTooLarge, "JSON body too large")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -28,6 +35,16 @@ func (a *App) attachClientTimings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid operation")
 		return
 	}
+	if req.ExperimentID != "" && !validExperimentID(req.ExperimentID) {
+		writeError(w, http.StatusBadRequest, "invalid experiment_id")
+		return
+	}
+	routeMode, ok := parseRouteMode(req.RouteMode)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid route_mode")
+		return
+	}
+	req.RouteMode = routeMode
 	meta := results.ClientTimingMeta{
 		RouteMode:    req.RouteMode,
 		ExperimentID: req.ExperimentID,

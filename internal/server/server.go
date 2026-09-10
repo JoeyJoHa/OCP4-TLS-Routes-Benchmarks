@@ -21,6 +21,7 @@ import (
 	"github.com/JoeyJoHa/OCP4-TLS-Routes-Benchmarks/internal/results"
 	"github.com/JoeyJoHa/OCP4-TLS-Routes-Benchmarks/internal/tlslisten"
 	"github.com/JoeyJoHa/OCP4-TLS-Routes-Benchmarks/web"
+	"golang.org/x/sync/errgroup"
 )
 
 // App is the HTTP/HTTPS TLS target.
@@ -51,7 +52,7 @@ func New(cfg config.Config, store *blobs.Store, logger *results.Logger, material
 	return app
 }
 
-func (a *App) Handler() http.Handler {
+func (a *App) Handler() (http.Handler, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.healthz)
 	mux.HandleFunc("GET /readyz", a.readyz)
@@ -69,16 +70,19 @@ func (a *App) Handler() http.Handler {
 
 	staticFS, err := fs.Sub(web.Files, "static")
 	if err != nil {
-		log.Fatalf("embed static files: %v", err)
+		return nil, fmt.Errorf("embed static files: %w", err)
 	}
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
-	return mux
+	return mux, nil
 }
 
 func (a *App) ListenAndServe(ctx context.Context) error {
-	handler := a.Handler()
-	httpSrv := a.newHTTPServer(a.cfg.HTTPAddr, handler)
-	httpsSrv := a.newHTTPServer(a.cfg.HTTPSAddr, handler)
+	handler, err := a.Handler()
+	if err != nil {
+		return err
+	}
+	httpSrv := a.newHTTPServer(ctx, a.cfg.HTTPAddr, handler)
+	httpsSrv := a.newHTTPServer(ctx, a.cfg.HTTPSAddr, handler)
 
 	clientCAs, err := certs.LoadClientCAs(a.cfg.TLSClientCAFile)
 	if err != nil {
@@ -93,37 +97,48 @@ func (a *App) ListenAndServe(ctx context.Context) error {
 	}
 	httpsLn = tlslisten.New(httpsLn, tlsCfg, a.tracker)
 
-	errCh := make(chan error, 2)
-	go func() {
+	group, ctx := errgroup.WithContext(ctx)
+	group.Go(func() error {
 		log.Printf("HTTP listening on %s", a.cfg.HTTPAddr)
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- fmt.Errorf("http: %w", err)
+			return fmt.Errorf("http: %w", err)
 		}
-	}()
-	go func() {
+		return nil
+	})
+	group.Go(func() error {
 		log.Printf("HTTPS listening on %s", httpsLn.Addr())
 		if err := httpsSrv.Serve(httpsLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- fmt.Errorf("https: %w", err)
+			return fmt.Errorf("https: %w", err)
 		}
-	}()
-
-	select {
-	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = httpSrv.Shutdown(shutdownCtx)
-		_ = httpsSrv.Shutdown(shutdownCtx)
 		return nil
-	case err := <-errCh:
-		return err
-	}
+	})
+	group.Go(func() error {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Duration(config.ShutdownTimeoutSecs)*time.Second)
+		defer cancel()
+		return errors.Join(
+			shutdownErr("http", httpSrv.Shutdown(shutdownCtx)),
+			shutdownErr("https", httpsSrv.Shutdown(shutdownCtx)),
+		)
+	})
+	return group.Wait()
 }
 
-func (a *App) newHTTPServer(addr string, handler http.Handler) *http.Server {
+func shutdownErr(name string, err error) error {
+	if err == nil || errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return fmt.Errorf("%s shutdown: %w", name, err)
+}
+
+func (a *App) newHTTPServer(ctx context.Context, addr string, handler http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: time.Duration(config.ReadHeaderTimeoutSecs) * time.Second,
+		IdleTimeout:       time.Duration(config.IdleTimeoutSecs) * time.Second,
+		MaxHeaderBytes:    config.MaxHeaderBytes,
+		BaseContext:       func(net.Listener) context.Context { return ctx },
 		ConnContext:       a.tracker.ConnContext,
 		ConnState:         a.tracker.ConnState,
 	}
@@ -292,9 +307,11 @@ func (a *App) record(r *http.Request, run results.Run) {
 
 func applyBenchHeaders(r *http.Request, run *results.Run) {
 	if v := r.Header.Get("X-Route-Mode"); v != "" {
-		run.RouteMode = v
+		if mode, ok := parseRouteMode(v); ok && mode != "" {
+			run.RouteMode = mode
+		}
 	}
-	if v := r.Header.Get("X-Experiment-Id"); v != "" {
+	if v := r.Header.Get("X-Experiment-Id"); v != "" && validExperimentID(v) {
 		run.ExperimentID = v
 	}
 	if v := r.Header.Get("X-Sample-Index"); v != "" {
@@ -314,18 +331,6 @@ func writeBlobError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, err.Error())
-	}
-}
-
-func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]string{"error": message})
-}
-
-func writeJSON(w http.ResponseWriter, status int, payload any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	if err := encodeJSON(w, payload); err != nil {
-		log.Printf("write json: %v", err)
 	}
 }
 
