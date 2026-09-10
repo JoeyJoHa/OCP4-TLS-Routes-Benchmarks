@@ -226,12 +226,12 @@ function cellHTML(col, run, context = {}) {
       return `<span class="badge badge-op">${run.operation}</span>`;
     case "run":
       if (summary && run.experiment_id) {
-        return `<span class="run-label">${run.experiment_id}</span> <span class="muted">(${samples.length} samples)</span>`;
+        return `<span class="run-label">${escapeHtml(run.experiment_id)}</span> <span class="muted">(${samples.length} samples)</span>`;
       }
       if (run.experiment_id) {
-        return `${run.experiment_id}#${run.sample_index || "?"}`;
+        return `${escapeHtml(run.experiment_id)}#${escapeHtml(run.sample_index || "?")}`;
       }
-      return run.name || "—";
+      return escapeHtml(run.name || "—");
     case "bytes":
       return formatBytes(run.bytes);
     case "route_mode":
@@ -325,8 +325,16 @@ function renderMetricsGuide() {
   ).join("");
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 function escapeAttr(value) {
-  return String(value).replace(/"/g, "&quot;");
+  return escapeHtml(value);
 }
 
 function percentile(sorted, p) {
@@ -419,7 +427,7 @@ function renderBlobs(blobs) {
   list.innerHTML = blobs
     .map(
       (blob) =>
-        `<li><span>${blob.name}</span><span>${formatBytes(blob.bytes)}</span></li>`
+        `<li><span>${escapeHtml(blob.name)}</span><span>${formatBytes(blob.bytes)}</span></li>`
     )
     .join("");
 }
