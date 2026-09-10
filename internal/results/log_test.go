@@ -93,6 +93,60 @@ func TestMergeClientTimingsMissingRun(t *testing.T) {
 	}
 }
 
+func TestMergeClientTimingsPreservesServerTLSReused(t *testing.T) {
+	logger, err := NewLogger(filepath.Join(t.TempDir(), "runs.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append(Run{
+		Operation:            "upload",
+		Name:                 "reuse.bin",
+		Bytes:                8,
+		TotalMs:              12,
+		TLSReused:            true,
+		TLSHandshakeServerMs: 0,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := logger.MergeClientTimings("reuse.bin", "upload", timing.Phases{
+		TLSHandshakeMs: 4.2,
+		ClientTotalMs:  15,
+	}, ClientTimingMeta{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated.TLSReused {
+		t.Fatalf("client handshake ms must not clear server TLSReused: %+v", updated)
+	}
+	if updated.TLSHandshakeMs != 4.2 {
+		t.Fatalf("expected client handshake ms, got %+v", updated)
+	}
+}
+
+func TestMergeClientTimingsDoesNotInventReuseFromHandshakeMs(t *testing.T) {
+	logger, err := NewLogger(filepath.Join(t.TempDir(), "runs.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append(Run{
+		Operation: "handshake",
+		Name:      "cold.bin",
+		TotalMs:   8,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := logger.MergeClientTimings("cold.bin", "handshake", timing.Phases{
+		TLSHandshakeMs: 12,
+		ClientTotalMs:  14,
+	}, ClientTimingMeta{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.TLSReused {
+		t.Fatalf("cold handshake must not set TLSReused: %+v", updated)
+	}
+}
+
 func TestMergeClientTimingsByExperimentID(t *testing.T) {
 	logger, err := NewLogger(filepath.Join(t.TempDir(), "runs.jsonl"))
 	if err != nil {

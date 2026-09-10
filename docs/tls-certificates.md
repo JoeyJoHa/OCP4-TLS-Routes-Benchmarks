@@ -21,13 +21,13 @@ Use `scripts/gen-certs.sh`:
 ./scripts/gen-certs.sh <profile> <output-dir> <dns-name> [more-dns-names...]
 ```
 
-Examples:
+Write each profile under `./certs/` (gitignored). Do not generate cert trees at the repo root.
 
 ```bash
-./scripts/gen-certs.sh ecdsa-p256 ./certs-ecdsa localhost
-./scripts/gen-certs.sh rsa-2048 ./certs-rsa2048 tlsbench-passthrough.apps.example.com localhost
-./scripts/gen-certs.sh rsa-4096 ./certs-rsa4096 tlsbench-passthrough.apps.example.com
-./scripts/gen-certs.sh ecdsa-p384 ./certs-ecdsa384 localhost
+./scripts/gen-certs.sh ecdsa-p256 ./certs/ecdsa-p256 localhost
+./scripts/gen-certs.sh rsa-2048 ./certs/rsa-2048 tlsbench-passthrough.apps.example.com localhost
+./scripts/gen-certs.sh rsa-4096 ./certs/rsa-4096 tlsbench-passthrough.apps.example.com
+./scripts/gen-certs.sh ecdsa-p384 ./certs/ecdsa-p384 localhost
 ```
 
 Output files:
@@ -47,7 +47,7 @@ tls.key     # Server private key
 podman run --rm -d --name tlsbench-bench \
   -p 8080:8080 -p 8443:8443 \
   -v tlsbench-data:/data \
-  -v "$(pwd)/certs-rsa2048:/certs:ro" \
+  -v "$(pwd)/certs/rsa-2048:/certs:ro" \
   -e TLS_CERT_FILE=/certs/tls.crt \
   -e TLS_KEY_FILE=/certs/tls.key \
   -e TLS_CA_FILE=/certs/ca.crt \
@@ -60,7 +60,7 @@ Run the same upload/download benchmark for each profile; swap only the mounted c
 Trust from the client:
 
 ```bash
-curl --cacert ./certs-rsa2048/ca.crt https://127.0.0.1:8443/api/info
+curl --cacert ./certs/rsa-2048/ca.crt https://127.0.0.1:8443/api/info
 ```
 
 ## OpenShift — TLS Secret
@@ -69,9 +69,9 @@ curl --cacert ./certs-rsa2048/ca.crt https://127.0.0.1:8443/api/info
 
 ```bash
 oc create secret generic tlsbench-server-rsa2048 -n tlsbench \
-  --from-file=tls.crt=./certs-rsa2048/tls.crt \
-  --from-file=tls.key=./certs-rsa2048/tls.key \
-  --from-file=ca.crt=./certs-rsa2048/ca.crt \
+  --from-file=tls.crt=./certs/rsa-2048/tls.crt \
+  --from-file=tls.key=./certs/rsa-2048/tls.key \
+  --from-file=ca.crt=./certs/rsa-2048/ca.crt \
   --dry-run=client -o yaml | oc apply -f -
 ```
 

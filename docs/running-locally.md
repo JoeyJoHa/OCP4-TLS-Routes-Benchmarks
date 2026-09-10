@@ -4,7 +4,7 @@ Use this path when Go 1.23+ is installed and you want the quickest edit/test loo
 
 ## Prerequisites
 
-- Go 1.23+ — https://go.dev/dl/ or `brew install go`
+- Go 1.23+ — [go.dev/dl](https://go.dev/dl/) or `brew install go`
 - `curl` on your workstation
 
 ## Setup
@@ -24,14 +24,14 @@ make run
 
 The app listens on:
 
-- HTTP: http://127.0.0.1:8080/
-- HTTPS: https://127.0.0.1:8443/ (self-signed ECDSA P-256 if no cert files exist)
+- HTTP: <http://127.0.0.1:8080/>
+- HTTPS: <https://127.0.0.1:8443/> (self-signed ECDSA P-256 if no cert files exist)
 
 On first start, if `./certs/tls.crt` and `./certs/tls.key` are missing, the app generates a lab CA and server certificate under `./certs/`.
 
 ## Open the dashboard
 
-http://127.0.0.1:8080/
+Open the [dashboard](http://127.0.0.1:8080/).
 
 The benchmark table fills after you run generate, upload, or download tests below. Repeated runs with the same `experiment_id` collapse to one summary row (click ▶ to expand samples). Use **Columns** to hide noisy fields; the **metrics guide** explains TLS hs cli/srv, MiB/s, and color hints.
 
@@ -131,10 +131,10 @@ Build a table: rows = size, columns = upload HTTP, upload HTTPS, download HTTP, 
 By default the app auto-generates **ECDSA P-256**. To benchmark other key types, generate PEM files and point env vars at them before `make run`:
 
 ```bash
-./scripts/gen-certs.sh ecdsa-p256 ./certs-ecdsa localhost
-export TLS_CERT_FILE=./certs-ecdsa/tls.crt
-export TLS_KEY_FILE=./certs-ecdsa/tls.key
-export TLS_CA_FILE=./certs-ecdsa/ca.crt
+./scripts/gen-certs.sh ecdsa-p256 ./certs/ecdsa-p256 localhost
+export TLS_CERT_FILE=./certs/ecdsa-p256/tls.crt
+export TLS_KEY_FILE=./certs/ecdsa-p256/tls.key
+export TLS_CA_FILE=./certs/ecdsa-p256/ca.crt
 make run
 ```
 

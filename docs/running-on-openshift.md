@@ -69,16 +69,16 @@ For **RSA 2048**, **RSA 4096**, or fixed lab certs, create a Secret and mount it
 ### Generate certs on your workstation
 
 ```bash
-./scripts/gen-certs.sh rsa-2048 ./certs-rsa2048 tlsbench-passthrough.apps.cluster.example.com
+./scripts/gen-certs.sh rsa-2048 ./certs/rsa-2048 tlsbench-passthrough.apps.cluster.example.com
 ```
 
 ### Create the Secret
 
 ```bash
 oc create secret generic tlsbench-server -n tlsbench \
-  --from-file=tls.crt=./certs-rsa2048/tls.crt \
-  --from-file=tls.key=./certs-rsa2048/tls.key \
-  --from-file=ca.crt=./certs-rsa2048/ca.crt
+  --from-file=tls.crt=./certs/rsa-2048/tls.crt \
+  --from-file=tls.key=./certs/rsa-2048/tls.key \
+  --from-file=ca.crt=./certs/rsa-2048/ca.crt
 ```
 
 ### Patch the Deployment
@@ -133,7 +133,7 @@ Port-forward if Routes are not reachable from your browser:
 oc port-forward -n tlsbench svc/tlsbench 8080:8080
 ```
 
-Open http://127.0.0.1:8080/
+Open the [dashboard](http://127.0.0.1:8080/).
 
 Enable **Collapse repeats** to group handshake and bulk experiments by `experiment_id`. Filter by Route mode when runs were labeled with `--route-mode`.
 
@@ -199,7 +199,7 @@ oc exec -n tlsbench -it deploy/tlsbench -- curl -svk https://tlsbench.tlsbench.s
 oc exec -n tlsbench -it deploy/tlsbench -- nc -vz tlsbench.tlsbench.svc 8443
 ```
 
-`ping` / `traceroute` may fail under `restricted-v2` SCC (no `NET_RAW`); `curl` and `nc` still work.
+ICMP `ping` / `traceroute` need `NET_RAW`, which `restricted-v2` (and this image) drop. Use `curl` or `nc`. A `GLIBC_2.38 not found` error from `ping` means the image was built with glibc BusyBox — rebuild from this tree (`busybox:1.36-uclibc`).
 
 ## 10. Cleanup
 

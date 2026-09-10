@@ -11,7 +11,7 @@ DNS_NAMES=("${@:3}")
 usage() {
   echo "usage: $0 <profile> <output-dir> <dns-name> [more-dns-names...]" >&2
   echo "profiles: ecdsa-p256, ecdsa-p384, rsa-2048, rsa-4096" >&2
-  echo "example: $0 rsa-2048 ./certs-rsa2048 tlsbench.apps.example.com localhost" >&2
+  echo "example: $0 rsa-2048 ./certs/rsa-2048 tlsbench.apps.example.com localhost" >&2
   exit 1
 }
 

@@ -263,7 +263,6 @@ func applyClientPhases(run *Run, phases timing.Phases) {
 	run.ClientTotalMs = phases.ClientTotalMs
 	if phases.TLSHandshakeMs > 0 {
 		run.TLSHandshakeMs = phases.TLSHandshakeMs
-		run.TLSReused = false
 	}
 }
 

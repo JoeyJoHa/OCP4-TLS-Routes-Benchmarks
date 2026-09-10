@@ -128,16 +128,17 @@ podman exec -it tlsbench sh
 # inside the container:
 curl -sS http://127.0.0.1:8080/healthz
 curl -sk https://127.0.0.1:8443/api/info
-ping -c 2 127.0.0.1
 nc -vz 127.0.0.1 8443
 ```
+
+`nc` and `traceroute` come from statically linked BusyBox (`busybox:1.36-uclibc`). ICMP `ping` needs `NET_RAW`, which this image does not grant (UID 65532). Use `nc` or `curl` to check connectivity.
 
 ## TLS certificates with different algorithms (Podman)
 
 For algorithm benchmarks (RSA 2048, RSA 4096, ECDSA), generate a cert set and mount it instead of the auto-generated volume.
 
 ```bash
-./scripts/gen-certs.sh rsa-2048 ./certs-rsa2048 localhost
+./scripts/gen-certs.sh rsa-2048 ./certs/rsa-2048 localhost
 ```
 
 Run with that cert directory:
@@ -146,7 +147,7 @@ Run with that cert directory:
 podman run --rm -d --name tlsbench-rsa \
   -p 8080:8080 -p 8443:8443 \
   -v tlsbench-data:/data \
-  -v "$(pwd)/certs-rsa2048:/certs:ro" \
+  -v "$(pwd)/certs/rsa-2048:/certs:ro" \
   -e TLS_CERT_FILE=/certs/tls.crt \
   -e TLS_KEY_FILE=/certs/tls.key \
   -e TLS_CA_FILE=/certs/ca.crt \
@@ -161,7 +162,9 @@ Re-run the same upload/download sizes; only the server key type changes. Details
 | Issue | Fix |
 | --- | --- |
 | `go: command not found` on `make test` / `make run` | Expected — Makefile uses Podman automatically |
-| Slow first build | Pulls `golang:1.23-bookworm` and `busybox`; later builds use cache |
+| Slow first build | Pulls `golang:1.23-bookworm` and `busybox:1.36-uclibc`; later builds use cache |
+| `ping: GLIBC_2.38 not found` | Old image copied glibc BusyBox; rebuild with `make compose-up` |
+| `ping: permission denied (are you root?)` | Expected without `NET_RAW`. Use `nc -vz` or `curl` |
 | HTTPS curl fails | Use `-k` or `curl --cacert` with `curl -sk https://127.0.0.1:8443/ca.crt -o ca.crt` |
 | Port already in use | `podman compose down` or change ports in `docker-compose.yml` |
 

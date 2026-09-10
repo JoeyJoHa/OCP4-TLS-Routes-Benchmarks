@@ -31,6 +31,7 @@ go.work.sum
 !.env.example
 
 # Runtime certs and keys (keep source tracked)
+# All generated profiles live here: certs/rsa-2048, certs/ecdsa-p256, ...
 /certs/
 *.pem
 *.key

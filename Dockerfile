@@ -9,8 +9,9 @@ COPY web ./web
 
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/tlsbench ./cmd/server
 
-# BusyBox from Docker Hub (no Alpine package CDN, no UBI microdnf)
-FROM docker.io/library/busybox:1.36 AS tools
+# musl/uclibc BusyBox is statically linked. The default glibc tag on aarch64
+# needs GLIBC_2.38, which Debian bookworm (runtime) does not provide.
+FROM docker.io/library/busybox:1.36-uclibc AS tools
 
 # Runtime reuses golang:bookworm: curl and CA certs are already in the image.
 # apk against dl-cdn.alpinelinux.org failed TLS verify in this environment.

@@ -1,6 +1,6 @@
 # OCP4 TLS Routes Benchmarks
 
-A Go HTTPS/HTTP target for OpenShift. Deploy it in-cluster, hit it through a **Service** or a **Route**, and measure TLS encrypt/decrypt plus disk write on a PVC. A small Web UI shows a benchmark table. The image also includes `ping`, `traceroute`, `nc`, and `curl` for `oc exec` debugging.
+A Go HTTPS/HTTP target for OpenShift. Deploy it in-cluster, hit it through a **Service** or a **Route**, and measure TLS encrypt/decrypt plus disk write on a PVC. A small Web UI shows a benchmark table. The image also includes statically linked BusyBox `ping`, `traceroute`, and `nc`, plus `curl`, for `oc exec` debugging (`ping` needs `NET_RAW`, which this image does not grant).
 
 ## Documentation
 
