@@ -3,10 +3,13 @@ package certs
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/JoeyJoHa/OCP4-TLS-Routes-Benchmarks/internal/config"
 )
 
 // LoadClientCAs returns a pool when mTLS is enabled via TLS_CLIENT_CA_FILE.
@@ -32,7 +35,7 @@ func LoadExtraCAs(dir string) (*x509.CertPool, error) {
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("read TLS_CA_DIR: %w", err)
@@ -50,7 +53,7 @@ func LoadExtraCAs(dir string) (*x509.CertPool, error) {
 		}
 		pemBytes, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("read extra CA %s: %w", name, err)
 		}
 		if pool.AppendCertsFromPEM(pemBytes) {
 			found = true
@@ -67,7 +70,7 @@ func ServerTLSConfig(material Material, clientCAs *x509.CertPool) *tls.Config {
 	cfg := &tls.Config{
 		MinVersion:   tls.VersionTLS12,
 		Certificates: []tls.Certificate{material.Certificate},
-		NextProtos:   []string{"h2", "http/1.1"},
+		NextProtos:   append([]string(nil), config.DefaultTLSNextProtos...),
 	}
 	if clientCAs != nil {
 		cfg.ClientCAs = clientCAs

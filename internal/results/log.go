@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -13,9 +14,11 @@ import (
 )
 
 const (
-	dirPerm     = 0o750
-	filePerm    = 0o644
-	bytesPerMiB = 1024 * 1024
+	dirPerm          = 0o750
+	filePerm         = 0o644
+	bytesPerMiB      = 1024 * 1024
+	scannerBufSize   = 64 * 1024
+	scannerMaxTokens = 1024 * 1024
 )
 
 // ErrNoMatchingRun is returned when client timings cannot be attached.
@@ -68,7 +71,7 @@ type Logger struct {
 
 func NewLogger(path string) (*Logger, error) {
 	if err := os.MkdirAll(filepath.Dir(path), dirPerm); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create results directory: %w", err)
 	}
 	return &Logger{path: path}, nil
 }
@@ -90,7 +93,7 @@ func (l *Logger) MergeClientTimings(name, operation string, phases timing.Phases
 
 	runs, err := l.readAllUnlocked()
 	if err != nil {
-		return Run{}, err
+		return Run{}, fmt.Errorf("read results log: %w", err)
 	}
 	idx := findMergeIndex(runs, name, operation, meta)
 	if idx < 0 {
@@ -100,7 +103,7 @@ func (l *Logger) MergeClientTimings(name, operation string, phases timing.Phases
 	applyClientMeta(&runs[idx], meta)
 	runs[idx].ThroughputMiBs = throughput(runs[idx])
 	if err := l.rewriteUnlocked(runs); err != nil {
-		return Run{}, err
+		return Run{}, fmt.Errorf("rewrite results log: %w", err)
 	}
 	return runs[idx], nil
 }
@@ -124,32 +127,35 @@ func (l *Logger) ReadNewest(limit int) ([]Run, error) {
 func (l *Logger) appendUnlocked(run Run) error {
 	line, err := json.Marshal(run)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal run: %w", err)
 	}
 	file, err := os.OpenFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, filePerm)
 	if err != nil {
-		return err
+		return fmt.Errorf("open results log: %w", err)
 	}
 	defer file.Close()
 	if _, err := file.Write(append(line, '\n')); err != nil {
-		return err
+		return fmt.Errorf("append results log: %w", err)
 	}
-	return file.Sync()
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("sync results log: %w", err)
+	}
+	return nil
 }
 
 func (l *Logger) readAllUnlocked() ([]Run, error) {
 	file, err := os.Open(l.path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return []Run{}, nil
 		}
-		return nil, err
+		return nil, fmt.Errorf("open results log: %w", err)
 	}
 	defer file.Close()
 
 	var runs []Run
 	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, scannerBufSize), scannerMaxTokens)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
@@ -162,40 +168,42 @@ func (l *Logger) readAllUnlocked() ([]Run, error) {
 		runs = append(runs, run)
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("scan results log: %w", err)
 	}
 	return runs, nil
 }
 
-func (l *Logger) rewriteUnlocked(runs []Run) error {
+func (l *Logger) rewriteUnlocked(runs []Run) (err error) {
 	tmp := l.path + ".tmp"
 	file, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, filePerm)
 	if err != nil {
-		return err
+		return fmt.Errorf("create results temp file: %w", err)
 	}
-	for _, run := range runs {
-		line, err := json.Marshal(run)
+	defer func() {
+		_ = file.Close()
 		if err != nil {
-			file.Close()
 			_ = os.Remove(tmp)
-			return err
 		}
-		if _, err := file.Write(append(line, '\n')); err != nil {
-			file.Close()
-			_ = os.Remove(tmp)
-			return err
+	}()
+	for _, run := range runs {
+		line, marshalErr := json.Marshal(run)
+		if marshalErr != nil {
+			return fmt.Errorf("marshal run: %w", marshalErr)
+		}
+		if _, writeErr := file.Write(append(line, '\n')); writeErr != nil {
+			return fmt.Errorf("write results temp file: %w", writeErr)
 		}
 	}
 	if err := file.Sync(); err != nil {
-		file.Close()
-		_ = os.Remove(tmp)
-		return err
+		return fmt.Errorf("sync results temp file: %w", err)
 	}
 	if err := file.Close(); err != nil {
-		_ = os.Remove(tmp)
-		return err
+		return fmt.Errorf("close results temp file: %w", err)
 	}
-	return os.Rename(tmp, l.path)
+	if err := os.Rename(tmp, l.path); err != nil {
+		return fmt.Errorf("replace results log: %w", err)
+	}
+	return nil
 }
 
 func throughput(run Run) float64 {

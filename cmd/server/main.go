@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -26,26 +27,26 @@ func main() {
 func run() error {
 	cfg, err := config.FromEnv()
 	if err != nil {
-		return err
+		return fmt.Errorf("config: %w", err)
 	}
 
 	random, err := os.Open(urandomDevice)
 	if err != nil {
-		return err
+		return fmt.Errorf("open %s: %w", urandomDevice, err)
 	}
 	defer random.Close()
 
 	store, err := blobs.NewStore(cfg.DataDir, cfg.MaxBlobBytes, random)
 	if err != nil {
-		return err
+		return fmt.Errorf("blob store: %w", err)
 	}
 	logger, err := results.NewLogger(cfg.ResultsLog)
 	if err != nil {
-		return err
+		return fmt.Errorf("results log: %w", err)
 	}
 	material, err := certs.LoadOrGenerate(cfg)
 	if err != nil {
-		return err
+		return fmt.Errorf("tls material: %w", err)
 	}
 	if material.Generated {
 		log.Printf("generated self-signed CA and server certificate (SANs: %v)", cfg.TLSDNSNames)
@@ -54,7 +55,7 @@ func run() error {
 	}
 
 	if _, err := certs.LoadExtraCAs(cfg.TLSCADir); err != nil {
-		return err
+		return fmt.Errorf("load extra CAs from %s: %w", cfg.TLSCADir, err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

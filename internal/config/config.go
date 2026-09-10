@@ -20,8 +20,13 @@ const (
 	DefaultResultsLog     = "/data/results/runs.jsonl"
 	DefaultDNSNames       = "localhost"
 	ReadHeaderTimeoutSecs = 10
+	IdleTimeoutSecs       = 120
+	ShutdownTimeoutSecs   = 10
 	ResultsAPILimit       = 500
 	MaxBlobNameLength     = 128
+	MaxExperimentIDLength = 128
+	MaxJSONBodyBytes      = 32 * 1024
+	MaxHeaderBytes        = 1 << 20
 	CertValidityDays      = 365
 )
 
@@ -39,6 +44,9 @@ const (
 	EnvMaxBlobBytes    = "MAX_BLOB_BYTES"
 	EnvResultsLog      = "RESULTS_LOG"
 )
+
+// DefaultTLSNextProtos is the ALPN list advertised on HTTPS (HTTP/2 preferred).
+var DefaultTLSNextProtos = []string{"h2", "http/1.1"}
 
 // Config is runtime configuration loaded from environment variables.
 type Config struct {

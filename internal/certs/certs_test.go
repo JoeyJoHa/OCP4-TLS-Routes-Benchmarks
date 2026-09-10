@@ -84,6 +84,23 @@ func TestLoadExtraCAs(t *testing.T) {
 	}
 }
 
+func TestCAKeyPath(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{in: "/certs/ca.crt", want: "/certs/ca.key"},
+		{in: "/certs/ca", want: "/certs/ca.key"},
+		{in: "ca.pem", want: "ca.key"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			if got := caKeyPath(tt.in); got != tt.want {
+				t.Fatalf("caKeyPath(%q)=%q want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
 func pemCA(t *testing.T, dir string) string {
 	t.Helper()
 	cfg := config.Config{

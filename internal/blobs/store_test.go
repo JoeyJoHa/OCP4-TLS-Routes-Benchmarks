@@ -64,13 +64,41 @@ func TestRejectsInvalidNameAndOversize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Generate("../etc/passwd", 8); !errors.Is(err, ErrInvalidName) {
-		t.Fatalf("path traversal: %v", err)
+	tests := []struct {
+		name    string
+		op      func() error
+		wantErr error
+	}{
+		{
+			name: "path traversal",
+			op: func() error {
+				_, err := store.Generate("../etc/passwd", 8)
+				return err
+			},
+			wantErr: ErrInvalidName,
+		},
+		{
+			name: "oversize generate",
+			op: func() error {
+				_, err := store.Generate("ok.bin", 64)
+				return err
+			},
+			wantErr: ErrTooLarge,
+		},
+		{
+			name: "oversize put",
+			op: func() error {
+				_, err := store.Put("ok.bin", strings.NewReader(strings.Repeat("y", 32)), 32)
+				return err
+			},
+			wantErr: ErrTooLarge,
+		},
 	}
-	if _, err := store.Generate("ok.bin", 64); !errors.Is(err, ErrTooLarge) {
-		t.Fatalf("oversize generate: %v", err)
-	}
-	if _, err := store.Put("ok.bin", strings.NewReader(strings.Repeat("y", 32)), 32); !errors.Is(err, ErrTooLarge) {
-		t.Fatalf("oversize put: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.op(); !errors.Is(err, tt.wantErr) {
+				t.Fatalf("got %v want %v", err, tt.wantErr)
+			}
+		})
 	}
 }

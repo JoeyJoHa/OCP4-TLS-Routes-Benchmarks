@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -55,11 +56,11 @@ func loadProvided(cfg config.Config) (Material, error) {
 	attachLeaf(&pair)
 	certPEM, err := os.ReadFile(cfg.TLSCertFile)
 	if err != nil {
-		return Material{}, err
+		return Material{}, fmt.Errorf("read server certificate: %w", err)
 	}
 	caPEM, err := readOptional(cfg.TLSCAFile)
 	if err != nil {
-		return Material{}, err
+		return Material{}, fmt.Errorf("read CA certificate: %w", err)
 	}
 	if len(caPEM) == 0 {
 		caPEM = certPEM
@@ -85,8 +86,12 @@ func generateAndWrite(cfg config.Config) (Material, error) {
 		return Material{}, fmt.Errorf("generate server key: %w", err)
 	}
 
+	caSerial, err := serialNumber()
+	if err != nil {
+		return Material{}, err
+	}
 	caTemplate := &x509.Certificate{
-		SerialNumber:          serialNumber(),
+		SerialNumber:          caSerial,
 		Subject:               pkix.Name{Organization: []string{"OCP4 TLS Bench"}, CommonName: "tlsbench-internal-ca"},
 		NotBefore:             now.Add(-time.Hour),
 		NotAfter:              notAfter,
@@ -99,9 +104,13 @@ func generateAndWrite(cfg config.Config) (Material, error) {
 		return Material{}, fmt.Errorf("create CA certificate: %w", err)
 	}
 
+	serverSerial, err := serialNumber()
+	if err != nil {
+		return Material{}, err
+	}
 	dnsNames, ipAddrs := splitNames(cfg.TLSDNSNames)
 	serverTemplate := &x509.Certificate{
-		SerialNumber:          serialNumber(),
+		SerialNumber:          serverSerial,
 		Subject:               pkix.Name{Organization: []string{"OCP4 TLS Bench"}, CommonName: "tlsbench"},
 		NotBefore:             now.Add(-time.Hour),
 		NotAfter:              notAfter,
@@ -120,11 +129,11 @@ func generateAndWrite(cfg config.Config) (Material, error) {
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: pemCertType, Bytes: serverDER})
 	keyPEM, err := encodeKey(serverKey)
 	if err != nil {
-		return Material{}, err
+		return Material{}, fmt.Errorf("encode server key: %w", err)
 	}
 	caKeyPEM, err := encodeKey(caKey)
 	if err != nil {
-		return Material{}, err
+		return Material{}, fmt.Errorf("encode CA key: %w", err)
 	}
 
 	if err := writeFile(cfg.TLSCAFile, caPEM, certPerm); err != nil {
@@ -142,7 +151,7 @@ func generateAndWrite(cfg config.Config) (Material, error) {
 
 	pair, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
-		return Material{}, err
+		return Material{}, fmt.Errorf("parse generated key pair: %w", err)
 	}
 	attachLeaf(&pair)
 	return Material{
@@ -167,7 +176,7 @@ func attachLeaf(cert *tls.Certificate) {
 func encodeKey(key *ecdsa.PrivateKey) ([]byte, error) {
 	der, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("marshal EC private key: %w", err)
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: pemKeyType, Bytes: der}), nil
 }
@@ -204,13 +213,13 @@ func splitNames(names []string) ([]string, []net.IP) {
 	return dns, ips
 }
 
-func serialNumber() *big.Int {
+func serialNumber() (*big.Int, error) {
 	limit := new(big.Int).Lsh(big.NewInt(1), 128)
 	n, err := rand.Int(rand.Reader, limit)
 	if err != nil {
-		return big.NewInt(time.Now().UnixNano())
+		return nil, fmt.Errorf("certificate serial: %w", err)
 	}
-	return n
+	return n, nil
 }
 
 func writeFile(path string, data []byte, perm os.FileMode) error {
@@ -228,7 +237,7 @@ func readOptional(path string) ([]byte, error) {
 	if err == nil {
 		return data, nil
 	}
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	return nil, err
