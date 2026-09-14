@@ -1,8 +1,10 @@
-# Stage 1: static Go binary (image already cached from make test)
+# Stage 1: static Go binary
 FROM docker.io/library/golang:1.23-bookworm AS builder
 WORKDIR /src
 
-COPY go.mod ./
+COPY go.mod go.sum ./
+RUN go mod download
+
 COPY cmd ./cmd
 COPY internal ./internal
 COPY web ./web
@@ -13,9 +15,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/tlsbenc
 # needs GLIBC_2.38, which Debian bookworm (runtime) does not provide.
 FROM docker.io/library/busybox:1.36-uclibc AS tools
 
-# Runtime reuses golang:bookworm: curl and CA certs are already in the image.
-# apk against dl-cdn.alpinelinux.org failed TLS verify in this environment.
-FROM docker.io/library/golang:1.23-bookworm
+FROM docker.io/library/debian:bookworm-slim
 
 ENV HTTP_ADDR=:8080 \
     HTTPS_ADDR=:8443 \
@@ -28,6 +28,10 @@ ENV HTTP_ADDR=:8080 \
     RESULTS_LOG=/data/results/runs.jsonl \
     SSL_CERT_FILE=/certs/ca-bundle.pem \
     CURL_CA_BUNDLE=/certs/ca-bundle.pem
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /out/tlsbench /usr/local/bin/tlsbench
 COPY --from=tools /bin/busybox /usr/local/bin/busybox

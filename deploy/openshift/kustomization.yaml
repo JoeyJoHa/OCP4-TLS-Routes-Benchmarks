@@ -10,3 +10,4 @@ resources:
   - 05-route-edge.yaml
   - 06-route-passthrough.yaml
   - 07-route-reencrypt.yaml
+  - 08-networkpolicy.yaml

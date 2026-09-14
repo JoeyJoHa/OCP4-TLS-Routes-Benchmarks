@@ -15,5 +15,6 @@ spec:
   tls:
     termination: reencrypt
     insecureEdgeTerminationPolicy: Redirect
-    # Set destinationCACertificate from the pod CA after first start:
+    # destinationCACertificate is required. After the pod has written /certs/ca.crt:
     #   ./scripts/patch-reencrypt-ca.sh tlsbench tlsbench tlsbench-reencrypt
+    # Do not benchmark this Route until that patch succeeds (otherwise HAProxy cannot verify the pod).

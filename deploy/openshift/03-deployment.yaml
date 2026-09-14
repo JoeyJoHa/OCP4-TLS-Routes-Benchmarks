@@ -72,7 +72,8 @@ spec:
           readinessProbe:
             httpGet:
               path: /readyz
-              port: http
+              port: https
+              scheme: HTTPS
             initialDelaySeconds: 5
             periodSeconds: 10
           volumeMounts:
