@@ -83,11 +83,15 @@ type listener struct {
 // New wraps a TCP listener so Accept completes the TLS handshake and
 // records its duration. The returned connection is *tls.Conn so HTTP/2 works.
 func New(inner net.Listener, config *tls.Config, tracker *Tracker) net.Listener {
-	cloned := config.Clone()
-	if len(cloned.NextProtos) == 0 {
-		cloned.NextProtos = append([]string(nil), appconfig.DefaultTLSNextProtos...)
+	if config == nil {
+		config = &tls.Config{}
 	}
-	return &listener{Listener: inner, config: cloned, tracker: tracker}
+	if len(config.NextProtos) == 0 {
+		cloned := config.Clone()
+		cloned.NextProtos = append([]string(nil), appconfig.DefaultTLSNextProtos...)
+		config = cloned
+	}
+	return &listener{Listener: inner, config: config, tracker: tracker}
 }
 
 func (l *listener) Accept() (net.Conn, error) {
@@ -103,7 +107,9 @@ func (l *listener) Accept() (net.Conn, error) {
 		cancel()
 		if err != nil {
 			log.Printf("tls handshake: %v", err)
-			_ = tlsConn.Close()
+			if closeErr := tlsConn.Close(); closeErr != nil {
+				log.Printf("close failed handshake: %v", closeErr)
+			}
 			continue
 		}
 		meta := &Meta{Handshake: time.Since(started)}

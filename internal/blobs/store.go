@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -73,7 +74,7 @@ func NewStore(dataDir string, maxBytes int64, random io.Reader) (*Store, error) 
 // Generate writes size bytes from the random source to a named blob.
 func (s *Store) Generate(name string, size int64) (Info, error) {
 	if err := validateName(name); err != nil {
-		return Info{}, err
+		return Info{}, fmt.Errorf("generate blob: %w", err)
 	}
 	if size <= 0 {
 		return Info{}, fmt.Errorf("size must be greater than 0")
@@ -91,7 +92,7 @@ func (s *Store) Generate(name string, size int64) (Info, error) {
 // Put writes the request body to a named blob. expected is 0 when Content-Length is unknown.
 func (s *Store) Put(name string, body io.Reader, expected int64) (Info, error) {
 	if err := validateName(name); err != nil {
-		return Info{}, err
+		return Info{}, fmt.Errorf("put blob: %w", err)
 	}
 	if expected > s.maxBytes {
 		return Info{}, ErrTooLarge
@@ -103,7 +104,7 @@ func (s *Store) Put(name string, body io.Reader, expected int64) (Info, error) {
 	limited := io.LimitReader(body, limit+1)
 	info, err := s.writeFrom(name, limited, expected, false)
 	if err != nil {
-		return Info{}, err
+		return Info{}, fmt.Errorf("put blob %s: %w", name, err)
 	}
 	if info.Bytes > s.maxBytes {
 		if err := removeBestEffort(s, name); err != nil {
@@ -123,7 +124,7 @@ func (s *Store) Put(name string, body io.Reader, expected int64) (Info, error) {
 // Open returns a read-only file handle for download.
 func (s *Store) Open(name string) (*os.File, Info, error) {
 	if err := validateName(name); err != nil {
-		return nil, Info{}, err
+		return nil, Info{}, fmt.Errorf("open blob: %w", err)
 	}
 	path := s.path(name)
 	file, err := os.Open(path)
@@ -135,8 +136,7 @@ func (s *Store) Open(name string) (*os.File, Info, error) {
 	}
 	stat, err := file.Stat()
 	if err != nil {
-		_ = file.Close()
-		return nil, Info{}, fmt.Errorf("stat blob %s: %w", name, err)
+		return nil, Info{}, errors.Join(fmt.Errorf("stat blob %s: %w", name, err), file.Close())
 	}
 	info := Info{
 		Name:     name,
@@ -159,10 +159,12 @@ func (s *Store) List() ([]Info, error) {
 			continue
 		}
 		if err := validateName(entry.Name()); err != nil {
+			log.Printf("skip blob %s: %v", entry.Name(), err)
 			continue
 		}
 		stat, err := entry.Info()
 		if err != nil {
+			log.Printf("stat blob %s: %v", entry.Name(), err)
 			continue
 		}
 		out = append(out, Info{
@@ -178,10 +180,12 @@ func (s *Store) List() ([]Info, error) {
 // Delete removes a blob and its hash sidecar.
 func (s *Store) Delete(name string) error {
 	if err := validateName(name); err != nil {
-		return err
+		return fmt.Errorf("delete blob: %w", err)
 	}
 	err := os.Remove(s.path(name))
-	_ = os.Remove(s.hashPath(name))
+	if hashErr := os.Remove(s.hashPath(name)); hashErr != nil && !errors.Is(hashErr, os.ErrNotExist) {
+		log.Printf("remove blob hash %s: %v", name, hashErr)
+	}
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return ErrNotFound
@@ -206,9 +210,16 @@ func (s *Store) writeFrom(name string, src io.Reader, expected int64, exact bool
 		return Info{}, fmt.Errorf("create temp blob: %w", err)
 	}
 	tmpName := tmp.Name()
+	closed := false
 	defer func() {
-		_ = tmp.Close()
-		_ = os.Remove(tmpName)
+		if !closed {
+			if closeErr := tmp.Close(); closeErr != nil {
+				log.Printf("close blob temp: %v", closeErr)
+			}
+		}
+		if rmErr := os.Remove(tmpName); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+			log.Printf("remove blob temp: %v", rmErr)
+		}
 	}()
 
 	hash := sha256.New()
@@ -236,6 +247,7 @@ func (s *Store) writeFrom(name string, src io.Reader, expected int64, exact bool
 	if err := tmp.Close(); err != nil {
 		return Info{}, fmt.Errorf("close blob temp: %w", err)
 	}
+	closed = true
 	if err := os.Rename(tmpName, finalPath); err != nil {
 		return Info{}, fmt.Errorf("rename blob %s: %w", name, err)
 	}
@@ -244,9 +256,11 @@ func (s *Store) writeFrom(name string, src io.Reader, expected int64, exact bool
 	if err := os.WriteFile(s.hashPath(name), []byte(sum+"\n"), filePerm); err != nil {
 		return Info{}, fmt.Errorf("write blob hash %s: %w", name, err)
 	}
-	stat, err := os.Stat(finalPath)
 	modified := time.Now().UTC()
-	if err == nil {
+	stat, err := os.Stat(finalPath)
+	if err != nil {
+		log.Printf("stat blob %s after write: %v", name, err)
+	} else {
 		modified = stat.ModTime().UTC()
 	}
 	return Info{

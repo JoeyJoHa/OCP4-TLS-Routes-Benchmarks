@@ -28,7 +28,8 @@ func LoadClientCAs(path string) (*x509.CertPool, error) {
 	return pool, nil
 }
 
-// LoadExtraCAs reads PEM files from TLS_CA_DIR for pod-to-pod trust.
+// LoadExtraCAs reads PEM files from TLS_CA_DIR. The HTTPS server does not use
+// this pool; scripts/entrypoint.sh merges the same directory into CURL_CA_BUNDLE.
 func LoadExtraCAs(dir string) (*x509.CertPool, error) {
 	if strings.TrimSpace(dir) == "" {
 		return nil, nil
@@ -66,15 +67,23 @@ func LoadExtraCAs(dir string) (*x509.CertPool, error) {
 }
 
 // ServerTLSConfig builds the HTTPS listener configuration.
-func ServerTLSConfig(material Material, clientCAs *x509.CertPool) *tls.Config {
-	cfg := &tls.Config{
-		MinVersion:   tls.VersionTLS12,
-		Certificates: []tls.Certificate{material.Certificate},
-		NextProtos:   append([]string(nil), config.DefaultTLSNextProtos...),
+func ServerTLSConfig(material Material, clientCAs *x509.CertPool, cfg config.Config) *tls.Config {
+	minVersion := cfg.TLSMinVersion
+	if minVersion == 0 {
+		minVersion = tls.VersionTLS12
+	}
+	tlsCfg := &tls.Config{
+		MinVersion:             minVersion,
+		Certificates:           []tls.Certificate{material.Certificate},
+		NextProtos:             append([]string(nil), config.DefaultTLSNextProtos...),
+		SessionTicketsDisabled: cfg.DisableSessionTickets,
+	}
+	if len(cfg.TLSCipherSuites) > 0 {
+		tlsCfg.CipherSuites = append([]uint16(nil), cfg.TLSCipherSuites...)
 	}
 	if clientCAs != nil {
-		cfg.ClientCAs = clientCAs
-		cfg.ClientAuth = tls.RequireAndVerifyClientCert
+		tlsCfg.ClientCAs = clientCAs
+		tlsCfg.ClientAuth = tls.RequireAndVerifyClientCert
 	}
-	return cfg
+	return tlsCfg
 }

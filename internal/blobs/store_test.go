@@ -28,7 +28,9 @@ func TestGenerateUploadDownload(t *testing.T) {
 		t.Fatal(err)
 	}
 	read, err := io.ReadAll(file)
-	_ = file.Close()
+	if closeErr := file.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,6 +2,7 @@ package tlslisten
 
 import (
 	"crypto/tls"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -24,7 +25,7 @@ func TestHandshakeDurationOnFirstRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tlsCfg := certs.ServerTLSConfig(material, nil)
+	tlsCfg := certs.ServerTLSConfig(material, nil, config.Config{DisableSessionTickets: true})
 	inner, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -36,14 +37,28 @@ func TestHandshakeDurationOnFirstRequest(t *testing.T) {
 	srv := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			gotMs, gotReused = FromContext(r.Context()).ConsumeHandshake()
-			_, _ = w.Write([]byte("ok"))
+			if _, err := w.Write([]byte("ok")); err != nil {
+				t.Errorf("write: %v", err)
+			}
 		}),
 		ReadHeaderTimeout: time.Second,
 		ConnContext:       tracker.ConnContext,
 		ConnState:         tracker.ConnState,
 	}
-	go func() { _ = srv.Serve(ln) }()
-	t.Cleanup(func() { _ = srv.Close() })
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- srv.Serve(ln)
+	}()
+	t.Cleanup(func() {
+		closeErr := srv.Close()
+		serveErr := <-serveDone
+		if closeErr != nil && !errors.Is(closeErr, http.ErrServerClosed) {
+			t.Errorf("close: %v", closeErr)
+		}
+		if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			t.Errorf("serve: %v", serveErr)
+		}
+	})
 
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -56,8 +71,9 @@ func TestHandshakeDurationOnFirstRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _ = io.Copy(io.Discard, resp.Body)
-	resp.Body.Close()
+	if err := drain(resp); err != nil {
+		t.Fatal(err)
+	}
 	if gotMs <= 0 {
 		t.Fatalf("expected handshake ms, got %v reused=%v", gotMs, gotReused)
 	}
@@ -68,7 +84,9 @@ func TestHandshakeDurationOnFirstRequest(t *testing.T) {
 	bad := &tls.Config{InsecureSkipVerify: false, ServerName: "wrong.example"}
 	conn, err := tls.Dial("tcp", inner.Addr().String(), bad)
 	if err == nil {
-		_ = conn.Close()
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close unexpected conn: %v", closeErr)
+		}
 		t.Fatal("expected handshake failure")
 	}
 
@@ -76,6 +94,13 @@ func TestHandshakeDurationOnFirstRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("server must keep serving after a failed handshake: %v", err)
 	}
-	_, _ = io.Copy(io.Discard, resp.Body)
-	resp.Body.Close()
+	if err := drain(resp); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func drain(resp *http.Response) error {
+	_, copyErr := io.Copy(io.Discard, resp.Body)
+	closeErr := resp.Body.Close()
+	return errors.Join(copyErr, closeErr)
 }

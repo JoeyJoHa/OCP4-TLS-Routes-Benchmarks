@@ -37,8 +37,14 @@ type Material struct {
 
 // LoadOrGenerate uses existing cert/key files, or writes a lab CA plus server cert.
 func LoadOrGenerate(cfg config.Config) (Material, error) {
-	certExists := fileExists(cfg.TLSCertFile)
-	keyExists := fileExists(cfg.TLSKeyFile)
+	certExists, err := fileExists(cfg.TLSCertFile)
+	if err != nil {
+		return Material{}, err
+	}
+	keyExists, err := fileExists(cfg.TLSKeyFile)
+	if err != nil {
+		return Material{}, err
+	}
 	if certExists && keyExists {
 		return loadProvided(cfg)
 	}
@@ -114,7 +120,7 @@ func generateAndWrite(cfg config.Config) (Material, error) {
 		Subject:               pkix.Name{Organization: []string{"OCP4 TLS Bench"}, CommonName: "tlsbench"},
 		NotBefore:             now.Add(-time.Hour),
 		NotAfter:              notAfter,
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 		DNSNames:              dnsNames,
@@ -131,15 +137,8 @@ func generateAndWrite(cfg config.Config) (Material, error) {
 	if err != nil {
 		return Material{}, fmt.Errorf("encode server key: %w", err)
 	}
-	caKeyPEM, err := encodeKey(caKey)
-	if err != nil {
-		return Material{}, fmt.Errorf("encode CA key: %w", err)
-	}
 
 	if err := writeFile(cfg.TLSCAFile, caPEM, certPerm); err != nil {
-		return Material{}, err
-	}
-	if err := writeFile(caKeyPath(cfg.TLSCAFile), caKeyPEM, filePerm); err != nil {
 		return Material{}, err
 	}
 	if err := writeFile(cfg.TLSCertFile, certPEM, certPerm); err != nil {
@@ -240,12 +239,18 @@ func readOptional(path string) ([]byte, error) {
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
-	return nil, err
+	return nil, fmt.Errorf("read %s: %w", path, err)
 }
 
-func fileExists(path string) bool {
+func fileExists(path string) (bool, error) {
 	_, err := os.Stat(path)
-	return err == nil
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return false, fmt.Errorf("stat %s: %w", path, err)
 }
 
 func caKeyPath(caFile string) string {
