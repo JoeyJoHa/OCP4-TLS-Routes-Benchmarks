@@ -1,16 +1,12 @@
 # Running TLS benchmarks on OpenShift
 
-Deploy the app in-cluster with a **PVC**, **Service**, and **Routes**, then run benchmarks from a Linux VM (external) or another pod (in-cluster).
+PVC + Service + Routes, then clients from a Linux VM or another pod. Handshake matrices: [methodology](tls-benchmark-methodology.md). Cert Secrets: [TLS certificates](tls-certificates.md).
 
 ## Prerequisites
 
-- OpenShift 4.x cluster and `oc` logged in
-- Image built and pushed to a registry the cluster can pull
-- Optional: Linux VM with `curl` and DNS to Route hostnames
+OpenShift 4.x, `oc` logged in, image in a registry the cluster can pull. Optional: Linux VM with `curl` and Route DNS.
 
-## 1. Build and push the image
-
-On your workstation (Podman):
+## 1. Build, push, deploy
 
 ```bash
 make image
@@ -18,27 +14,13 @@ podman tag tlsbench:dev quay.io/<user>/tlsbench:latest
 podman push quay.io/<user>/tlsbench:latest
 ```
 
-Update the image in `deploy/openshift/03-deployment.yaml`:
-
-```yaml
-image: quay.io/<user>/tlsbench:latest
-imagePullPolicy: Always
-```
-
-## 2. Deploy manifests
+Set `image:` / `imagePullPolicy: Always` in `deploy/openshift/03-deployment.yaml`, then:
 
 ```bash
 oc apply -k deploy/openshift
-oc get pods,svc,route -n tlsbench
-```
-
-Wait until the pod is ready:
-
-```bash
 oc wait -n tlsbench --for=condition=ready pod -l app.kubernetes.io/name=tlsbench --timeout=120s
+oc get route -n tlsbench
 ```
-
-Routes created by default:
 
 | Route | Termination | Pod sees |
 | --- | --- | --- |
@@ -46,170 +28,64 @@ Routes created by default:
 | `tlsbench-passthrough` | passthrough | TLS |
 | `tlsbench-reencrypt` | reencrypt | TLS |
 
-Get hostnames:
+Readiness probes HTTPS `:8443`. Ingress is limited by `08-networkpolicy.yaml` (same namespace + OpenShift ingress).
 
-```bash
-oc get route -n tlsbench
-```
+## 2. Reencrypt destination CA
 
-## 3. Patch reencrypt destination CA
-
-After the pod has generated `/certs/ca.crt` (first start with emptyDir certs):
+Patch **before** any reencrypt run. Empty `destinationCACertificate` makes the Route fail or skip pod verification:
 
 ```bash
 ./scripts/patch-reencrypt-ca.sh tlsbench tlsbench tlsbench-reencrypt
+oc get route tlsbench-reencrypt -n tlsbench -o jsonpath='{.spec.tls.destinationCACertificate}' | wc -c
 ```
 
-## 4. TLS certificates with Secrets (recommended for algorithm benchmarks)
+## 3. Optional write token
 
-By default the Deployment uses an **emptyDir** for `/certs` and the app **auto-generates** ECDSA P-256 certs on first start.
-
-For **RSA 2048**, **RSA 4096**, or fixed lab certs, create a Secret and mount it instead.
-
-### Generate certs on your workstation
+Blob write, probe, timings merge, and `/ca.crt` are open unless `BENCH_WRITE_TOKEN` is set. Dashboard reads stay public.
 
 ```bash
-./scripts/gen-certs.sh rsa-2048 ./certs/rsa-2048 tlsbench-passthrough.apps.cluster.example.com
+oc set env -n tlsbench deploy/tlsbench BENCH_WRITE_TOKEN='replace-me'
+export BENCH_WRITE_TOKEN=replace-me
 ```
 
-### Create the Secret
+`vm-bench.sh` sends `Authorization: Bearer` from that env var. Set `SERVE_CA=false` to 404 `/ca.crt`.
+
+Fixed RSA/ECDSA certs: create a Secret and mount it — see [TLS certificates](tls-certificates.md). Extra PEMs in ConfigMap `tlsbench-internal-ca` are merged into `CURL_CA_BUNDLE` by the entrypoint only (not the Go process).
+
+## 4. Dashboard and in-cluster Service
 
 ```bash
-oc create secret generic tlsbench-server -n tlsbench \
-  --from-file=tls.crt=./certs/rsa-2048/tls.crt \
-  --from-file=tls.key=./certs/rsa-2048/tls.key \
-  --from-file=ca.crt=./certs/rsa-2048/ca.crt
+oc port-forward -n tlsbench svc/tlsbench 8080:8080   # if Routes are not in the browser
 ```
-
-### Patch the Deployment
-
-Add to `deploy/openshift/03-deployment.yaml` (or patch live):
-
-**Environment:**
-
-```yaml
-- name: TLS_CERT_FILE
-  value: /etc/tls/private/tls.crt
-- name: TLS_KEY_FILE
-  value: /etc/tls/private/tls.key
-- name: TLS_CA_FILE
-  value: /etc/tls/private/ca.crt
-```
-
-**volumeMounts:**
-
-```yaml
-- name: server-tls
-  mountPath: /etc/tls/private
-  readOnly: true
-```
-
-**volumes** (replace or remove `certs` emptyDir if you only use the Secret):
-
-```yaml
-- name: server-tls
-  secret:
-    secretName: tlsbench-server
-```
-
-Redeploy:
 
 ```bash
-oc apply -k deploy/openshift
-oc rollout restart deployment/tlsbench -n tlsbench
-```
-
-Repeat benchmarks with a new Secret per key type (ecdsa-p256, rsa-2048, rsa-4096). See [TLS certificates for benchmarks](tls-certificates.md).
-
-### Extra internal CAs (pod-to-pod)
-
-Add PEM files to ConfigMap `tlsbench-internal-ca` (see `deploy/openshift/02-configmap-ca.yaml`). The entrypoint merges them into `CURL_CA_BUNDLE` for in-cluster `curl`.
-
-## 5. Open the dashboard
-
-Port-forward if Routes are not reachable from your browser:
-
-```bash
-oc port-forward -n tlsbench svc/tlsbench 8080:8080
-```
-
-Open the [dashboard](http://127.0.0.1:8080/).
-
-Enable **Collapse repeats** to group handshake and bulk experiments by `experiment_id`. Filter by Route mode when runs were labeled with `--route-mode`.
-
-## 6. In-cluster benchmarks (Service HTTP vs HTTPS)
-
-```bash
-# Disk generate
 oc exec -n tlsbench deploy/tlsbench -- \
   curl -sS -X POST 'http://127.0.0.1:8080/api/blobs?name=1mb.bin&size=1048576'
-
-# Upload HTTP (Service)
 oc exec -n tlsbench deploy/tlsbench -- \
   sh -c 'head -c 1048576 /dev/urandom | curl -sS --upload-file - \
     http://tlsbench.tlsbench.svc:8080/api/blobs/svc-http.bin'
-
-# Upload HTTPS (Service) — TLS decrypt at pod
 oc exec -n tlsbench deploy/tlsbench -- \
   sh -c 'head -c 1048576 /dev/urandom | curl -sS --cacert /certs/ca.crt --upload-file - \
     https://tlsbench.tlsbench.svc:8443/api/blobs/svc-https.bin'
 ```
 
-Check `/api/info` over each path to confirm the `tls` field.
+## 5. External VM → Route
 
-## 7. External benchmarks (Linux VM → Route)
-
-Replace hostnames with your cluster Routes.
+Always pass `--route-mode`. Handshake-only and `--reuse` flags: [methodology](tls-benchmark-methodology.md).
 
 ```bash
-# Edge — TLS terminates at router; pod sees HTTP
-./scripts/vm-bench.sh https://tlsbench-edge.apps.example.com 1048576
-
-# Passthrough — TLS to the app
+./scripts/vm-bench.sh --route-mode edge \
+  https://tlsbench-edge.apps.example.com 1048576
 curl -sk https://tlsbench-passthrough.apps.example.com/ca.crt -o ca.crt
-./scripts/vm-bench.sh https://tlsbench-passthrough.apps.example.com 1048576 --cacert ca.crt
-
-# Reencrypt — after patch-reencrypt-ca.sh
-./scripts/vm-bench.sh https://tlsbench-reencrypt.apps.example.com 1048576
+./scripts/vm-bench.sh --route-mode passthrough \
+  https://tlsbench-passthrough.apps.example.com 1048576 --cacert ca.crt
+./scripts/vm-bench.sh --route-mode reencrypt \
+  https://tlsbench-reencrypt.apps.example.com 1048576
 ```
 
-## 8. Build comparison tables
-
-Use the same payload size across paths. Example columns:
-
-| Size | Service HTTP upload | Service HTTPS upload | Edge upload | Passthrough upload |
-| --- | --- | --- | --- | --- |
-| 1 MiB | … | … | … | … |
-
-Data sources:
-
-- Web UI on the Route or port-forward URL — metrics guide, collapsible experiment groups, column picker; columns include cipher, cert key, Route mode, ALPN, TLS hs cli/srv, Xfer, MiB/s
-- `GET /api/results` (JSON)
-- `./scripts/vm-bench.sh` posts curl `-w` phases to `POST /api/results/timings` with `experiment_id`, `sample_index`, and `route_mode`
-- `./scripts/vm-bench.sh --handshake-only --route-mode edge|passthrough|reencrypt` for handshake percentiles
-
-Always pass `--route-mode` on OpenShift so dashboard filters match the path under test.
-
-See [TLS benchmark methodology](tls-benchmark-methodology.md) for valid comparison tables.
-
-## 9. Debug with network tools
-
-```bash
-oc exec -n tlsbench -it deploy/tlsbench -- curl -svk https://tlsbench.tlsbench.svc:8443/api/info
-oc exec -n tlsbench -it deploy/tlsbench -- nc -vz tlsbench.tlsbench.svc 8443
-```
-
-ICMP `ping` / `traceroute` need `NET_RAW`, which `restricted-v2` (and this image) drop. Use `curl` or `nc`. A `GLIBC_2.38 not found` error from `ping` means the image was built with glibc BusyBox — rebuild from this tree (`busybox:1.36-uclibc`).
-
-## 10. Cleanup
+Debug: `oc exec … -- curl -svk https://tlsbench.tlsbench.svc:8443/api/info` or `nc -vz`. ICMP needs `NET_RAW` (dropped). `GLIBC_2.38` on `ping` means rebuild with `busybox:1.36-uclibc`.
 
 ```bash
 oc delete -k deploy/openshift
-# or
-oc delete namespace tlsbench
+# or: oc delete namespace tlsbench
 ```
-
-## Related
-
-- [Running with Podman/Docker](running-with-podman-docker.md) — pre-flight before this guide  
-- [TLS certificates for benchmarks](tls-certificates.md) — RSA / ECDSA generation and Secret layout

@@ -56,6 +56,11 @@ For full benchmark steps, certificates, and OpenShift deployment, use the [docs]
 | `DATA_DIR` | `/data` | PVC mount (blobs + results) |
 | `MAX_BLOB_BYTES` | `268435456` | Max generate/upload size (256 MiB) |
 | `RESULTS_LOG` | `/data/results/runs.jsonl` | Append-only run log for the UI |
+| `TLS_MIN_VERSION` | `1.2` | `1.2` or `1.3` |
+| `TLS_CIPHER_SUITES` | empty (Go default) | Comma-separated Go IANA names, e.g. `TLS_AES_128_GCM_SHA256` |
+| `TLS_DISABLE_SESSION_TICKETS` | `true` | `false` to allow resumption (contaminates cold tables) |
+| `BENCH_WRITE_TOKEN` | empty | If set, Bearer token required on writes, probe, `/ca.crt` |
+| `SERVE_CA` | `true` | `false` returns 404 on `GET /ca.crt` |
 
 If `TLS_CERT_FILE` / `TLS_KEY_FILE` are missing, the process generates an internal **ECDSA P-256** CA and server certificate. For RSA or other profiles, use [`scripts/gen-certs.sh`](scripts/gen-certs.sh) — see [docs/tls-certificates.md](docs/tls-certificates.md).
 
