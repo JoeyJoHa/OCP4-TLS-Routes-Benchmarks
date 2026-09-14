@@ -9,7 +9,8 @@
 #   --warmup N        Discarded warmup samples (default: 3 when --repeat > 1)
 #   --handshake-only  GET /api/bench/probe only (no blob I/O)
 #   --http1.1         Force curl --http1.1 (pin ALPN)
-#   --reuse           Reuse TCP/TLS connection across samples (default: cold per sample)
+#   --http2           Force curl --http2 (explicit ALPN; not a cert-key table)
+#   --reuse           HTTP/2 multiplex: N streams on one connection (needs --handshake-only)
 #   --route-mode M    Label rows: edge|passthrough|reencrypt|service-http|service-https
 #   --experiment-id ID  Group samples (default: auto-generated)
 set -euo pipefail
@@ -18,6 +19,7 @@ REPEAT=0
 WARMUP=0
 HANDSHAKE_ONLY=false
 HTTP11=false
+HTTP2=false
 REUSE=false
 ROUTE_MODE=""
 EXPERIMENT_ID=""
@@ -26,6 +28,7 @@ usage() {
   echo "usage: $0 [options] <base-url> [size-bytes] [curl args...]" >&2
   echo "example: $0 https://tlsbench-passthrough.apps.example.com 1048576 --cacert ca.crt" >&2
   echo "example: $0 --handshake-only --http1.1 --route-mode passthrough https://127.0.0.1:8443 -k" >&2
+  echo "example: $0 --handshake-only --reuse --repeat 30 --route-mode service-https https://127.0.0.1:8443 -k" >&2
   exit 1
 }
 
@@ -45,6 +48,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --http1.1)
       HTTP11=true
+      shift
+      ;;
+    --http2)
+      HTTP2=true
       shift
       ;;
     --reuse)
@@ -90,12 +97,20 @@ CURL_EXTRA=()
 if [[ $# -gt 0 ]]; then
   CURL_EXTRA=("$@")
 fi
+if [[ -n "${BENCH_WRITE_TOKEN:-}" ]]; then
+  CURL_EXTRA+=(-H "Authorization: Bearer ${BENCH_WRITE_TOKEN}")
+fi
 
 if [[ "$HANDSHAKE_ONLY" == true ]]; then
   if [[ "$REPEAT" -eq 0 ]]; then
     REPEAT=30
   fi
-  if [[ "$WARMUP" -eq 0 ]]; then
+  if [[ "$REUSE" == true ]]; then
+    if [[ "$WARMUP" -gt 0 ]]; then
+      echo "note: --reuse ignores --warmup (one handshake for all streams)" >&2
+    fi
+    WARMUP=0
+  elif [[ "$WARMUP" -eq 0 ]]; then
     WARMUP=3
   fi
 else
@@ -107,6 +122,27 @@ else
   fi
 fi
 
+if [[ "$HTTP11" == true && "$HTTP2" == true ]]; then
+  echo "error: use either --http1.1 or --http2, not both" >&2
+  exit 1
+fi
+
+if [[ "$REUSE" == true ]]; then
+  if [[ "$HANDSHAKE_ONLY" != true ]]; then
+    echo "error: --reuse requires --handshake-only (HTTP/2 multiplex on one connection)" >&2
+    exit 1
+  fi
+  if [[ "$HTTP11" == true ]]; then
+    echo "error: --reuse uses HTTP/2 multiplex on one connection; omit --http1.1" >&2
+    exit 1
+  fi
+fi
+
+if [[ "$HANDSHAKE_ONLY" == true && "$REUSE" != true && "$HTTP11" != true && "$HTTP2" != true ]]; then
+  echo "error: --handshake-only needs --http1.1 (cert-key tables) or --http2/--reuse (ALPN h2)" >&2
+  exit 1
+fi
+
 if [[ -z "$EXPERIMENT_ID" ]]; then
   EXPERIMENT_ID="vm-$(date +%s)-$$"
 fi
@@ -115,6 +151,7 @@ WORKDIR="$(mktemp -d)"
 trap 'rm -rf "${WORKDIR}"' EXIT
 
 CURL_JSON='{"time_namelookup":%{time_namelookup},"time_connect":%{time_connect},"time_appconnect":%{time_appconnect},"time_pretransfer":%{time_pretransfer},"time_starttransfer":%{time_starttransfer},"time_redirect":%{time_redirect},"time_total":%{time_total},"http_code":%{http_code}}'
+CURL_JSON_LINE=$'{"url":"%{url}","num_connects":%{num_connects},"http_version":"%{http_version}","time_namelookup":%{time_namelookup},"time_connect":%{time_connect},"time_appconnect":%{time_appconnect},"time_pretransfer":%{time_pretransfer},"time_starttransfer":%{time_starttransfer},"time_redirect":%{time_redirect},"time_total":%{time_total},"http_code":%{http_code}}\n'
 
 bench_headers=()
 if [[ -n "$ROUTE_MODE" ]]; then
@@ -128,12 +165,12 @@ curl_extra() {
 curl_protocol_flags=()
 if [[ "$HTTP11" == true ]]; then
   curl_protocol_flags=(--http1.1)
+elif [[ "$HTTP2" == true ]]; then
+  curl_protocol_flags=(--http2)
 fi
 
-curl_conn_flags=()
-if [[ "$REUSE" != true ]]; then
-  curl_conn_flags=(--no-keepalive)
-fi
+# Cold samples always close the connection; --reuse uses a separate multiplex path.
+curl_conn_flags=(--no-keepalive --no-sessionid)
 
 declare -a TLS_HS_SAMPLES=()
 declare -a TCP_SAMPLES=()
@@ -214,13 +251,19 @@ record_sample() {
   fi
 }
 
-run_handshake_sample() {
+probe_url_for() {
   local sample_index="$1"
   local probe_url="${BASE_URL}/api/bench/probe?experiment_id=${EXPERIMENT_ID}&sample_index=${sample_index}"
   if [[ -n "$ROUTE_MODE" ]]; then
     probe_url="${probe_url}&route_mode=${ROUTE_MODE}"
   fi
-  local timing
+  printf '%s' "${probe_url}"
+}
+
+run_handshake_sample() {
+  local sample_index="$1"
+  local probe_url timing
+  probe_url="$(probe_url_for "${sample_index}")"
   timing="$(
     curl_extra ${curl_protocol_flags[@]+"${curl_protocol_flags[@]}"} ${curl_conn_flags[@]+"${curl_conn_flags[@]}"} \
       -o "${WORKDIR}/probe-${sample_index}.json" -w "${CURL_JSON}" \
@@ -230,6 +273,90 @@ run_handshake_sample() {
   read -r tls_hs tcp_ms total_ms <<< "$(curl_phases_ms "${timing}")"
   record_sample "${tls_hs}" "${tcp_ms}" "${total_ms}"
   echo "sample ${sample_index}: curl ${timing}"
+}
+
+multiplex_timing_rows() {
+  python3 - "$1" "$2" <<'PY'
+import json, sys
+from urllib.parse import parse_qs, urlparse
+
+path, expected_repeat = sys.argv[1], int(sys.argv[2])
+rows = []
+with open(path, encoding="utf-8") as handle:
+    for raw in handle:
+        line = raw.strip()
+        if not line:
+            continue
+        data = json.loads(line)
+        url = data.pop("url", "")
+        indexes = parse_qs(urlparse(url).query).get("sample_index", [])
+        if not indexes:
+            raise SystemExit("error: curl write-out missing sample_index in url")
+        version = str(data.get("http_version", ""))
+        if not version.startswith("2"):
+            raise SystemExit(
+                "error: --reuse requires HTTP/2 multiplex, got http_version=%s" % version
+            )
+        if int(data.get("http_code") or 0) != 200:
+            raise SystemExit(
+                "error: --reuse stream sample %s http_code=%s"
+                % (indexes[0], data.get("http_code"))
+            )
+        rows.append((int(indexes[0]), data))
+if len(rows) != expected_repeat:
+    raise SystemExit(
+        "error: --reuse expected %d stream timings, got %d" % (expected_repeat, len(rows))
+    )
+new_connects = sum(int(data.get("num_connects") or 0) for _, data in rows)
+if expected_repeat > 1 and new_connects != 1:
+    raise SystemExit(
+        "error: --reuse expected 1 TCP connect for %d streams, got %d"
+        % (expected_repeat, new_connects)
+    )
+rows.sort(key=lambda item: item[0])
+for index, data in rows:
+    print("%d\t%s" % (index, json.dumps(data, separators=(",", ":"))))
+PY
+}
+
+run_handshake_multiplex() {
+  local i probe_url timing_file timing_lines sample_index timing tls_hs tcp_ms total_ms curl_help rows
+  local -a mux_args=()
+
+  curl_help="$(curl --help all 2>/dev/null || curl -h 2>/dev/null || true)"
+  if ! printf '%s\n' "${curl_help}" | grep -q -- '--parallel'; then
+    echo "error: --reuse needs curl 7.66+ with --parallel" >&2
+    exit 1
+  fi
+
+  mux_args=(--http2 --parallel --parallel-max "${REPEAT}")
+  if printf '%s\n' "${curl_help}" | grep -q -- '--max-connects'; then
+    mux_args+=(--max-connects 1)
+  fi
+
+  for ((i = 1; i <= REPEAT; i++)); do
+    probe_url="$(probe_url_for "${i}")"
+    mux_args+=(-o "${WORKDIR}/probe-${i}.json" "${probe_url}")
+  done
+
+  timing_file="${WORKDIR}/multiplex-timings.jsonl"
+  timing_lines="$(
+    curl_extra ${mux_args[@]+"${mux_args[@]}"} -w "${CURL_JSON_LINE}"
+  )" || true
+  if [[ -z "${timing_lines}" ]]; then
+    echo "error: --reuse curl produced no timings" >&2
+    exit 1
+  fi
+  printf '%s\n' "${timing_lines}" > "${timing_file}"
+
+  rows="$(multiplex_timing_rows "${timing_file}" "${REPEAT}")"
+  while IFS=$'\t' read -r sample_index timing; do
+    [[ -n "${sample_index}" ]] || continue
+    submit_timings handshake "${timing}" "${sample_index}"
+    read -r tls_hs tcp_ms total_ms <<< "$(curl_phases_ms "${timing}")"
+    record_sample "${tls_hs}" "${tcp_ms}" "${total_ms}"
+    echo "sample ${sample_index}: curl ${timing}"
+  done <<< "${rows}"
 }
 
 run_blob_upload_sample() {
@@ -270,7 +397,11 @@ run_blob_download_sample() {
 
 print_summary() {
   echo
-  echo "== experiment ${EXPERIMENT_ID} summary (after ${WARMUP} warmup discarded) =="
+  if [[ "$REUSE" == true ]]; then
+    echo "== experiment ${EXPERIMENT_ID} summary (HTTP/2 multiplex, ${REPEAT} streams, 1 connection) =="
+  else
+    echo "== experiment ${EXPERIMENT_ID} summary (after ${WARMUP} warmup discarded) =="
+  fi
   echo -n "tls_handshake_ms: "
   percentile_summary "${TLS_HS_SAMPLES[@]}"
   echo -n "tcp_connect_ms: "
@@ -282,14 +413,19 @@ print_summary() {
 TOTAL_ITERS=$((WARMUP + REPEAT))
 
 if [[ "$HANDSHAKE_ONLY" == true ]]; then
-  echo "== handshake-only probe (${REPEAT} samples, ${WARMUP} warmup) to ${BASE_URL}"
-  for ((i = 1; i <= TOTAL_ITERS; i++)); do
-    run_handshake_sample "${i}"
-  done
-  if [[ "$WARMUP" -gt 0 ]]; then
-    TLS_HS_SAMPLES=("${TLS_HS_SAMPLES[@]:$WARMUP}")
-    TCP_SAMPLES=("${TCP_SAMPLES[@]:$WARMUP}")
-    TOTAL_SAMPLES=("${TOTAL_SAMPLES[@]:$WARMUP}")
+  if [[ "$REUSE" == true ]]; then
+    echo "== handshake-only HTTP/2 multiplex (${REPEAT} streams, 1 connection) to ${BASE_URL}"
+    run_handshake_multiplex
+  else
+    echo "== handshake-only probe (${REPEAT} samples, ${WARMUP} warmup) to ${BASE_URL}"
+    for ((i = 1; i <= TOTAL_ITERS; i++)); do
+      run_handshake_sample "${i}"
+    done
+    if [[ "$WARMUP" -gt 0 ]]; then
+      TLS_HS_SAMPLES=("${TLS_HS_SAMPLES[@]:$WARMUP}")
+      TCP_SAMPLES=("${TCP_SAMPLES[@]:$WARMUP}")
+      TOTAL_SAMPLES=("${TOTAL_SAMPLES[@]:$WARMUP}")
+    fi
   fi
   print_summary
   echo
@@ -306,7 +442,7 @@ head -c "${SIZE}" /dev/urandom > "${FILE}"
 if [[ "$REPEAT" -eq 1 && "$WARMUP" -eq 0 ]]; then
   echo "== upload ${NAME} (${SIZE} bytes) to ${BASE_URL}"
   UPLOAD_TIMING="$(
-    curl_extra ${curl_protocol_flags[@]+"${curl_protocol_flags[@]}"} \
+    curl_extra ${curl_protocol_flags[@]+"${curl_protocol_flags[@]}"} ${curl_conn_flags[@]+"${curl_conn_flags[@]}"} \
       ${bench_headers[@]+"${bench_headers[@]}"} \
       -H "X-Experiment-Id: ${EXPERIMENT_ID}" \
       -H "X-Sample-Index: 1" \
@@ -321,7 +457,7 @@ if [[ "$REPEAT" -eq 1 && "$WARMUP" -eq 0 ]]; then
 
   echo "== download ${NAME} from ${BASE_URL}"
   DOWNLOAD_TIMING="$(
-    curl_extra ${curl_protocol_flags[@]+"${curl_protocol_flags[@]}"} \
+    curl_extra ${curl_protocol_flags[@]+"${curl_protocol_flags[@]}"} ${curl_conn_flags[@]+"${curl_conn_flags[@]}"} \
       ${bench_headers[@]+"${bench_headers[@]}"} \
       -H "X-Experiment-Id: ${EXPERIMENT_ID}" \
       -H "X-Sample-Index: 1" \
