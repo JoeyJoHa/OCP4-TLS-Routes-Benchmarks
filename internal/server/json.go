@@ -23,3 +23,9 @@ func encodeJSON(w http.ResponseWriter, payload any) error {
 	enc.SetEscapeHTML(true)
 	return enc.Encode(payload)
 }
+
+func writeBody(w http.ResponseWriter, body []byte) {
+	if _, err := w.Write(body); err != nil {
+		log.Printf("write response: %v", err)
+	}
+}

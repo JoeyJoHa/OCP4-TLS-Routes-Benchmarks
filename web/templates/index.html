@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'">
   <title>OCP4 TLS Route Benchmarks</title>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
@@ -97,7 +98,9 @@
     <p class="muted" id="table-hint">
       Repeated runs with the same <code>experiment_id</code> appear as one summary row. Click the row or ▶ to expand individual samples.
       On <strong>reencrypt</strong> Routes, compare <strong>TLS hs cli</strong> (client→router) with <strong>TLS hs srv</strong> (router→pod).
+      <strong>TLS hs cli</strong> is empty until <code>vm-bench.sh</code> posts curl timings; reused HTTP/2 streams show <strong>Reused</strong> and must not be compared to a cold p50.
     </p>
+    <p class="muted metric-warn" id="results-truncated" hidden></p>
 
     <div class="table-wrap">
       <table>

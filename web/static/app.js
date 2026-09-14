@@ -60,12 +60,12 @@ const METRIC_GUIDE = [
     bad: "< 10 MiB/s for large local uploads",
   },
   {
-    id: "route_mode",
-    title: "Route mode",
-    text: "Termination path label from vm-bench. Edge = TLS at router; passthrough = TLS at pod; reencrypt = both.",
-    good: "Label matches the URL you tested",
-    warn: "—",
-    bad: "Missing label when comparing Routes",
+    id: "tls_reused",
+    title: "Reused",
+    text: "Keep-alive or HTTP/2 stream on an existing connection. TLS hs srv is empty; do not compare TLS hs cli on sample 1 of --reuse to cold p50.",
+    good: "yes on samples 2+ of --reuse",
+    warn: "yes on a cold handshake study",
+    bad: "Comparing --reuse TLS hs cli to cold p50",
   },
 ];
 
@@ -142,7 +142,7 @@ function formatTime(iso) {
 
 function badgeTLS(run) {
   if (!run.tls) return '<span class="badge badge-http">HTTP</span>';
-  const label = run.tls_version || "TLS";
+  const label = escapeHtml(run.tls_version || "TLS");
   return `<span class="badge badge-tls">${label}</span>`;
 }
 
@@ -219,11 +219,11 @@ function cellHTML(col, run, context = {}) {
   switch (col.id) {
     case "expand":
       if (!summary || !groupId) return "";
-      return `<button type="button" class="expand-btn" data-group="${groupId}" aria-expanded="${expanded}" title="Show individual samples">${expanded ? "▼" : "▶"}</button>`;
+      return `<button type="button" class="expand-btn" data-group="${escapeAttr(groupId)}" aria-expanded="${expanded}" title="Show individual samples">${expanded ? "▼" : "▶"}</button>`;
     case "timestamp":
       return formatTime(run.timestamp);
     case "operation":
-      return `<span class="badge badge-op">${run.operation}</span>`;
+      return `<span class="badge badge-op">${escapeHtml(run.operation || "")}</span>`;
     case "run":
       if (summary && run.experiment_id) {
         return `<span class="run-label">${escapeHtml(run.experiment_id)}</span> <span class="muted">(${samples.length} samples)</span>`;
@@ -235,15 +235,15 @@ function cellHTML(col, run, context = {}) {
     case "bytes":
       return formatBytes(run.bytes);
     case "route_mode":
-      return run.route_mode || "—";
+      return escapeHtml(run.route_mode || "—");
     case "tls":
       return badgeTLS(run);
     case "cipher":
-      return `<span class="cipher">${run.cipher || "—"}</span>`;
+      return `<span class="cipher">${escapeHtml(run.cipher || "—")}</span>`;
     case "key":
-      return formatKey(run.tls_key_algorithm, run.tls_key_size, run.tls_key_curve);
+      return escapeHtml(formatKey(run.tls_key_algorithm, run.tls_key_size, run.tls_key_curve));
     case "alpn":
-      return run.alpn || "—";
+      return escapeHtml(run.alpn || "—");
     case "dns_ms":
       return `<span class="${metricClass("dns_ms", run.dns_ms, run)}">${formatMs(run.dns_ms)}</span>`;
     case "tcp_connect_ms":
@@ -414,7 +414,7 @@ function renderConnection(info) {
     ["Cert SANs", (info.server_cert_sans || []).join(", ") || "—"],
   ];
   details.innerHTML = rows
-    .map(([key, value]) => `<dt>${key}</dt><dd>${value || "—"}</dd>`)
+    .map(([key, value]) => `<dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value || "—")}</dd>`)
     .join("");
 }
 
@@ -561,9 +561,22 @@ async function refresh() {
     renderConnection(info);
     renderBlobs(blobs.blobs || blobs);
     renderResults(results.runs || results);
+    renderTruncated(results);
   } catch (err) {
     document.getElementById("conn-summary").textContent = `Failed to load: ${err.message}`;
   }
+}
+
+function renderTruncated(results) {
+  const el = document.getElementById("results-truncated");
+  if (!el) return;
+  if (results && results.truncated) {
+    el.hidden = false;
+    el.textContent = `Showing the newest ${results.runs.length} of ${results.total} runs. Pass a higher limit or trim RESULTS_LOG so percentiles include the full study.`;
+    return;
+  }
+  el.hidden = true;
+  el.textContent = "";
 }
 
 function initColumnPicker() {

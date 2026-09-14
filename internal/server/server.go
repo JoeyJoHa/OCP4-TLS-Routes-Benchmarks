@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -73,22 +74,22 @@ func (a *App) Handler() (http.Handler, error) {
 		return nil, fmt.Errorf("embed static files: %w", err)
 	}
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
-	return mux, nil
+	return a.wrap(mux), nil
 }
 
 func (a *App) ListenAndServe(ctx context.Context) error {
 	handler, err := a.Handler()
 	if err != nil {
-		return err
+		return fmt.Errorf("handler: %w", err)
 	}
 	httpSrv := a.newHTTPServer(ctx, a.cfg.HTTPAddr, handler)
 	httpsSrv := a.newHTTPServer(ctx, a.cfg.HTTPSAddr, handler)
 
 	clientCAs, err := certs.LoadClientCAs(a.cfg.TLSClientCAFile)
 	if err != nil {
-		return err
+		return fmt.Errorf("load client CAs: %w", err)
 	}
-	tlsCfg := certs.ServerTLSConfig(a.material, clientCAs)
+	tlsCfg := certs.ServerTLSConfig(a.material, clientCAs, a.cfg)
 	httpsSrv.TLSConfig = tlsCfg
 
 	httpsLn, err := net.Listen("tcp", a.cfg.HTTPSAddr)
@@ -136,6 +137,8 @@ func (a *App) newHTTPServer(ctx context.Context, addr string, handler http.Handl
 		Addr:              addr,
 		Handler:           handler,
 		ReadHeaderTimeout: time.Duration(config.ReadHeaderTimeoutSecs) * time.Second,
+		ReadTimeout:       time.Duration(config.ReadTimeoutSecs) * time.Second,
+		WriteTimeout:      time.Duration(config.WriteTimeoutSecs) * time.Second,
 		IdleTimeout:       time.Duration(config.IdleTimeoutSecs) * time.Second,
 		MaxHeaderBytes:    config.MaxHeaderBytes,
 		BaseContext:       func(net.Listener) context.Context { return ctx },
@@ -146,7 +149,7 @@ func (a *App) newHTTPServer(ctx context.Context, addr string, handler http.Handl
 
 func (a *App) healthz(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok\n"))
+	writeBody(w, []byte("ok\n"))
 }
 
 func (a *App) readyz(w http.ResponseWriter, _ *http.Request) {
@@ -155,13 +158,17 @@ func (a *App) readyz(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok\n"))
+	writeBody(w, []byte("ok\n"))
 }
 
-func (a *App) serveCA(w http.ResponseWriter, _ *http.Request) {
+func (a *App) serveCA(w http.ResponseWriter, r *http.Request) {
+	if !a.cfg.ServeCA {
+		http.NotFound(w, r)
+		return
+	}
 	w.Header().Set("Content-Type", "application/x-pem-file")
 	w.Header().Set("Content-Disposition", "attachment; filename=ca.crt")
-	_, _ = w.Write(a.material.CAPEM)
+	writeBody(w, a.material.CAPEM)
 }
 
 func (a *App) dashboard(w http.ResponseWriter, _ *http.Request) {
@@ -171,20 +178,37 @@ func (a *App) dashboard(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write(data)
+	writeBody(w, data)
 }
 
 func (a *App) apiInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, requestinfo.FromRequest(r, a.hostname, &a.material.Certificate))
 }
 
-func (a *App) apiResults(w http.ResponseWriter, _ *http.Request) {
-	runs, err := a.log.ReadNewest(config.ResultsAPILimit)
+func (a *App) apiResults(w http.ResponseWriter, r *http.Request) {
+	limit := config.ResultsAPIDefaultLimit
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			writeError(w, http.StatusBadRequest, "limit must be a positive integer")
+			return
+		}
+		limit = parsed
+	}
+	if limit > config.ResultsAPIMaxLimit {
+		limit = config.ResultsAPIMaxLimit
+	}
+	runs, total, err := a.log.ReadNewestPage(limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"runs":      runs,
+		"total":     total,
+		"limit":     limit,
+		"truncated": total > len(runs),
+	})
 }
 
 func (a *App) listBlobs(w http.ResponseWriter, _ *http.Request) {
@@ -294,9 +318,7 @@ func (a *App) record(r *http.Request, run results.Run) {
 	if handshakeMs, reused := tlslisten.FromContext(r.Context()).ConsumeHandshake(); handshakeMs > 0 || reused {
 		run.TLSReused = reused
 		if handshakeMs > 0 {
-			if run.TLSHandshakeMs == 0 {
-				run.TLSHandshakeMs = handshakeMs
-			}
+			// TLSHandshakeMs is client-only (curl appconnect−connect) after timings merge.
 			run.TLSHandshakeServerMs = handshakeMs
 		}
 	}

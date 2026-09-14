@@ -23,8 +23,11 @@ func TestFromRequestHTTPHasNoTLS(t *testing.T) {
 	if info.TLS {
 		t.Fatal("edge HTTP must not set tls")
 	}
-	if info.ClientAddr != "192.0.2.10" {
+	if info.ClientAddr != "10.0.0.1" {
 		t.Fatalf("client=%s", info.ClientAddr)
+	}
+	if info.XForwardedFor != "192.0.2.10, 10.0.0.1" {
+		t.Fatalf("xff=%s", info.XForwardedFor)
 	}
 	if info.XForwardedProto != "https" {
 		t.Fatalf("proto=%s", info.XForwardedProto)

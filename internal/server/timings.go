@@ -64,6 +64,10 @@ func (a *App) attachClientTimings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
+		if errors.Is(err, results.ErrAmbiguousRun) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

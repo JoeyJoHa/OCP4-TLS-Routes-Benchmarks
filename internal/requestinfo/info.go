@@ -8,7 +8,6 @@ import (
 	"crypto/x509"
 	"net"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -104,11 +103,6 @@ func leafFrom(cert *tls.Certificate) *x509.Certificate {
 }
 
 func clientAddr(r *http.Request) string {
-	forwarded := r.Header.Get("X-Forwarded-For")
-	if forwarded != "" {
-		parts := strings.Split(forwarded, ",")
-		return strings.TrimSpace(parts[0])
-	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

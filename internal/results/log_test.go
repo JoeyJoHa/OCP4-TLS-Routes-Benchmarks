@@ -44,7 +44,7 @@ func TestAppendAndReadNewest(t *testing.T) {
 	}
 }
 
-func TestMergeClientTimingsUpdatesNewestMatch(t *testing.T) {
+func TestMergeClientTimingsUpdatesMatchingName(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "runs.jsonl")
 	logger, err := NewLogger(path)
 	if err != nil {
@@ -53,10 +53,10 @@ func TestMergeClientTimingsUpdatesNewestMatch(t *testing.T) {
 	if err := logger.Append(Run{Operation: "upload", Name: "a.bin", Bytes: 8, TotalMs: 10}); err != nil {
 		t.Fatal(err)
 	}
-	if err := logger.Append(Run{Operation: "upload", Name: "a.bin", Bytes: 8, TotalMs: 20, TLSHandshakeServerMs: 12}); err != nil {
+	if err := logger.Append(Run{Operation: "upload", Name: "b.bin", Bytes: 8, TotalMs: 20, TLSHandshakeServerMs: 12}); err != nil {
 		t.Fatal(err)
 	}
-	updated, err := logger.MergeClientTimings("a.bin", "upload", timing.Phases{
+	updated, err := logger.MergeClientTimings("b.bin", "upload", timing.Phases{
 		DNSMs:          1.5,
 		TCPConnectMs:   2.5,
 		TLSHandshakeMs: 40,
@@ -68,7 +68,7 @@ func TestMergeClientTimingsUpdatesNewestMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	if updated.TotalMs != 20 {
-		t.Fatalf("should merge into newest run, total_ms=%v", updated.TotalMs)
+		t.Fatalf("should merge into named run, total_ms=%v", updated.TotalMs)
 	}
 	if updated.DNSMs != 1.5 || updated.TLSHandshakeMs != 40 || updated.TLSHandshakeServerMs != 12 {
 		t.Fatalf("merged=%+v", updated)
@@ -78,7 +78,24 @@ func TestMergeClientTimingsUpdatesNewestMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	if runs[0].DNSMs != 1.5 || runs[1].DNSMs != 0 {
-		t.Fatalf("only newest row should have client timings: %+v", runs)
+		t.Fatalf("only matching row should have client timings: %+v", runs)
+	}
+}
+
+func TestMergeClientTimingsRejectsAmbiguousName(t *testing.T) {
+	logger, err := NewLogger(filepath.Join(t.TempDir(), "runs.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append(Run{Operation: "upload", Name: "a.bin", Bytes: 8, TotalMs: 10}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.Append(Run{Operation: "upload", Name: "a.bin", Bytes: 8, TotalMs: 20}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = logger.MergeClientTimings("a.bin", "upload", timing.Phases{ClientTotalMs: 1}, ClientTimingMeta{})
+	if !errors.Is(err, ErrAmbiguousRun) {
+		t.Fatalf("err=%v", err)
 	}
 }
 

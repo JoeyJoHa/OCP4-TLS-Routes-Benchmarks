@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"crypto/tls"
+	"testing"
+)
 
 func TestFromEnv(t *testing.T) {
 	tests := []struct {
@@ -47,8 +50,56 @@ func TestFromEnv(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "zero max",
-			env:     map[string]string{EnvMaxBlobBytes: "0"},
+			name: "tls min version 1.3 and tickets off by default",
+			env:  map[string]string{EnvTLSMinVersion: "1.3"},
+			check: func(t *testing.T, cfg Config) {
+				if cfg.TLSMinVersion != tls.VersionTLS13 {
+					t.Fatalf("TLSMinVersion=%d", cfg.TLSMinVersion)
+				}
+				if !cfg.DisableSessionTickets {
+					t.Fatal("session tickets should be disabled by default")
+				}
+				if !cfg.ServeCA {
+					t.Fatal("SERVE_CA should default true")
+				}
+			},
+		},
+		{
+			name:    "bad min version",
+			env:     map[string]string{EnvTLSMinVersion: "1.1"},
+			wantErr: true,
+		},
+		{
+			name: "serve ca off and tickets on",
+			env: map[string]string{
+				EnvServeCA:           "false",
+				EnvTLSDisableTickets: "false",
+				EnvWriteToken:        "lab-token",
+			},
+			check: func(t *testing.T, cfg Config) {
+				if cfg.ServeCA {
+					t.Fatal("ServeCA should be false")
+				}
+				if cfg.DisableSessionTickets {
+					t.Fatal("session tickets should stay enabled when env is false")
+				}
+				if cfg.WriteToken != "lab-token" {
+					t.Fatalf("WriteToken=%q", cfg.WriteToken)
+				}
+			},
+		},
+		{
+			name: "cipher suite pin",
+			env:  map[string]string{EnvTLSCipherSuites: "TLS_AES_128_GCM_SHA256"},
+			check: func(t *testing.T, cfg Config) {
+				if len(cfg.TLSCipherSuites) != 1 || cfg.TLSCipherSuites[0] != tls.TLS_AES_128_GCM_SHA256 {
+					t.Fatalf("TLSCipherSuites=%v", cfg.TLSCipherSuites)
+				}
+			},
+		},
+		{
+			name:    "unknown cipher",
+			env:     map[string]string{EnvTLSCipherSuites: "RC4-MD5"},
 			wantErr: true,
 		},
 	}
@@ -58,6 +109,11 @@ func TestFromEnv(t *testing.T) {
 			t.Setenv(EnvDataDir, "")
 			t.Setenv(EnvMaxBlobBytes, "")
 			t.Setenv(EnvTLSDNSNames, "")
+			t.Setenv(EnvTLSMinVersion, "")
+			t.Setenv(EnvTLSCipherSuites, "")
+			t.Setenv(EnvTLSDisableTickets, "")
+			t.Setenv(EnvServeCA, "")
+			t.Setenv(EnvWriteToken, "")
 			for key, value := range tt.env {
 				t.Setenv(key, value)
 			}

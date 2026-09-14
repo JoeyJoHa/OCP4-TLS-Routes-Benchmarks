@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -23,6 +24,9 @@ const (
 
 // ErrNoMatchingRun is returned when client timings cannot be attached.
 var ErrNoMatchingRun = errors.New("no matching run")
+
+// ErrAmbiguousRun is returned when more than one run matches a timings merge.
+var ErrAmbiguousRun = errors.New("multiple matching runs; include experiment_id and sample_index")
 
 // Run is one timed generate, upload, or download.
 type Run struct {
@@ -95,9 +99,9 @@ func (l *Logger) MergeClientTimings(name, operation string, phases timing.Phases
 	if err != nil {
 		return Run{}, fmt.Errorf("read results log: %w", err)
 	}
-	idx := findMergeIndex(runs, name, operation, meta)
-	if idx < 0 {
-		return Run{}, ErrNoMatchingRun
+	idx, err := findMergeIndex(runs, name, operation, meta)
+	if err != nil {
+		return Run{}, fmt.Errorf("find merge target: %w", err)
 	}
 	applyClientPhases(&runs[idx], phases)
 	applyClientMeta(&runs[idx], meta)
@@ -110,18 +114,25 @@ func (l *Logger) MergeClientTimings(name, operation string, phases timing.Phases
 
 // ReadNewest returns up to limit runs, newest first.
 func (l *Logger) ReadNewest(limit int) ([]Run, error) {
+	runs, _, err := l.ReadNewestPage(limit)
+	return runs, err
+}
+
+// ReadNewestPage returns up to limit runs (newest first) and the total stored count.
+func (l *Logger) ReadNewestPage(limit int) ([]Run, int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	runs, err := l.readAllUnlocked()
 	if err != nil {
-		return nil, err
+		return nil, 0, fmt.Errorf("read results log: %w", err)
 	}
+	total := len(runs)
 	reverse(runs)
 	if limit > 0 && len(runs) > limit {
 		runs = runs[:limit]
 	}
-	return runs, nil
+	return runs, total, nil
 }
 
 func (l *Logger) appendUnlocked(run Run) error {
@@ -133,7 +144,11 @@ func (l *Logger) appendUnlocked(run Run) error {
 	if err != nil {
 		return fmt.Errorf("open results log: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			log.Printf("close results log: %v", closeErr)
+		}
+	}()
 	if _, err := file.Write(append(line, '\n')); err != nil {
 		return fmt.Errorf("append results log: %w", err)
 	}
@@ -151,9 +166,13 @@ func (l *Logger) readAllUnlocked() ([]Run, error) {
 		}
 		return nil, fmt.Errorf("open results log: %w", err)
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			log.Printf("close results log: %v", closeErr)
+		}
+	}()
 
-	var runs []Run
+	runs := make([]Run, 0, 256)
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, scannerBufSize), scannerMaxTokens)
 	for scanner.Scan() {
@@ -163,6 +182,7 @@ func (l *Logger) readAllUnlocked() ([]Run, error) {
 		}
 		var run Run
 		if err := json.Unmarshal(line, &run); err != nil {
+			log.Printf("skipping corrupt results line: %v", err)
 			continue
 		}
 		runs = append(runs, run)
@@ -180,9 +200,13 @@ func (l *Logger) rewriteUnlocked(runs []Run) (err error) {
 		return fmt.Errorf("create results temp file: %w", err)
 	}
 	defer func() {
-		_ = file.Close()
+		if closeErr := file.Close(); closeErr != nil && !errors.Is(closeErr, os.ErrClosed) {
+			log.Printf("close results temp file: %v", closeErr)
+		}
 		if err != nil {
-			_ = os.Remove(tmp)
+			if rmErr := os.Remove(tmp); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+				log.Printf("remove results temp file: %v", rmErr)
+			}
 		}
 	}()
 	for _, run := range runs {
@@ -242,8 +266,9 @@ func bulkDurationMs(run Run) float64 {
 	return run.TotalMs
 }
 
-func findMergeIndex(runs []Run, name, operation string, meta ClientTimingMeta) int {
+func findMergeIndex(runs []Run, name, operation string, meta ClientTimingMeta) (int, error) {
 	idx := -1
+	matches := 0
 	for i, run := range runs {
 		if run.Operation != operation {
 			continue
@@ -252,14 +277,20 @@ func findMergeIndex(runs []Run, name, operation string, meta ClientTimingMeta) i
 			if run.ExperimentID != meta.ExperimentID || run.SampleIndex != meta.SampleIndex {
 				continue
 			}
-			idx = i
+		} else if run.Name != name {
 			continue
 		}
-		if run.Name == name {
-			idx = i
-		}
+		idx = i
+		matches++
 	}
-	return idx
+	switch matches {
+	case 0:
+		return -1, ErrNoMatchingRun
+	case 1:
+		return idx, nil
+	default:
+		return -1, ErrAmbiguousRun
+	}
 }
 
 func applyClientPhases(run *Run, phases timing.Phases) {

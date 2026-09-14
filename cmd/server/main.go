@@ -34,7 +34,11 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("open %s: %w", urandomDevice, err)
 	}
-	defer random.Close()
+	defer func() {
+		if err := random.Close(); err != nil {
+			log.Printf("close %s: %v", urandomDevice, err)
+		}
+	}()
 
 	store, err := blobs.NewStore(cfg.DataDir, cfg.MaxBlobBytes, random)
 	if err != nil {
@@ -52,10 +56,6 @@ func run() error {
 		log.Printf("generated self-signed CA and server certificate (SANs: %v)", cfg.TLSDNSNames)
 	} else {
 		log.Printf("loaded server certificate from %s", cfg.TLSCertFile)
-	}
-
-	if _, err := certs.LoadExtraCAs(cfg.TLSCADir); err != nil {
-		return fmt.Errorf("load extra CAs from %s: %w", cfg.TLSCADir, err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

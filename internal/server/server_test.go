@@ -2,17 +2,23 @@ package server
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/JoeyJoHa/OCP4-TLS-Routes-Benchmarks/internal/blobs"
 	"github.com/JoeyJoHa/OCP4-TLS-Routes-Benchmarks/internal/certs"
 	"github.com/JoeyJoHa/OCP4-TLS-Routes-Benchmarks/internal/config"
 	"github.com/JoeyJoHa/OCP4-TLS-Routes-Benchmarks/internal/results"
+	"github.com/JoeyJoHa/OCP4-TLS-Routes-Benchmarks/internal/tlslisten"
 )
 
 func newTestApp(t *testing.T) *App {
@@ -26,6 +32,7 @@ func newTestApp(t *testing.T) *App {
 		DataDir:      dir,
 		MaxBlobBytes: 1024 * 1024,
 		ResultsLog:   filepath.Join(dir, "results", "runs.jsonl"),
+		ServeCA:      true,
 	}
 	material, err := certs.LoadOrGenerate(cfg)
 	if err != nil {
@@ -404,6 +411,272 @@ func TestAttachClientTimingsRejectsOversizedJSON(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusRequestEntityTooLarge && resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("status=%d", resp.StatusCode)
+	}
+}
+
+func TestProbeKeepsServerHandshakeOutOfClientColumn(t *testing.T) {
+	app := newTestApp(t)
+	client, baseURL := startTLSApp(t, app)
+
+	url := baseURL + "/api/bench/probe?experiment_id=hs-split&sample_index=1&route_mode=service-https"
+	resp, err := client.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainAndClose(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("probe=%d", resp.StatusCode)
+	}
+
+	runs, err := app.log.ReadNewest(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("len=%d", len(runs))
+	}
+	run := runs[0]
+	if run.TLSHandshakeMs != 0 {
+		t.Fatalf("TLS hs cli must stay empty until timings merge: %+v", run)
+	}
+	if run.TLSHandshakeServerMs <= 0 {
+		t.Fatalf("expected server handshake ms: %+v", run)
+	}
+	if run.TLSReused {
+		t.Fatal("first request must not be reused")
+	}
+}
+
+func TestHTTP2FollowUpRequestIsReused(t *testing.T) {
+	app := newTestApp(t)
+	client, baseURL := startTLSApp(t, app)
+	for i := 1; i <= 2; i++ {
+		url := fmt.Sprintf("%s/api/bench/probe?experiment_id=hs-reuse&sample_index=%d&route_mode=service-https", baseURL, i)
+		resp, err := client.Get(url)
+		if err != nil {
+			t.Fatal(err)
+		}
+		drainAndClose(t, resp)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("probe %d=%d", i, resp.StatusCode)
+		}
+	}
+	runs, err := app.log.ReadNewest(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("len=%d", len(runs))
+	}
+	var first, second results.Run
+	for _, run := range runs {
+		switch run.SampleIndex {
+		case 1:
+			first = run
+		case 2:
+			second = run
+		}
+	}
+	if first.TLSReused || first.TLSHandshakeServerMs <= 0 {
+		t.Fatalf("sample 1: %+v", first)
+	}
+	if !second.TLSReused || second.TLSHandshakeServerMs != 0 {
+		t.Fatalf("sample 2 should be reused with empty server hs: %+v", second)
+	}
+}
+
+func startTLSApp(t *testing.T, app *App) (*http.Client, string) {
+	t.Helper()
+	app.cfg.DisableSessionTickets = true
+	tlsCfg := certs.ServerTLSConfig(app.material, nil, app.cfg)
+	inner, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln := tlslisten.New(inner, tlsCfg, app.tracker)
+	srv := &http.Server{
+		Handler:           mustHandler(t, app),
+		ReadHeaderTimeout: time.Second,
+		TLSConfig:         tlsCfg,
+		ConnContext:       app.tracker.ConnContext,
+		ConnState:         app.tracker.ConnState,
+	}
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- srv.Serve(ln)
+	}()
+	t.Cleanup(func() {
+		closeErr := srv.Close()
+		serveErr := <-serveDone
+		if closeErr != nil && !errors.Is(closeErr, http.ErrServerClosed) {
+			t.Errorf("close: %v", closeErr)
+		}
+		if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			t.Errorf("serve: %v", serveErr)
+		}
+	})
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
+			ForceAttemptHTTP2: true,
+		},
+		Timeout: 5 * time.Second,
+	}
+	baseURL := "https://" + inner.Addr().String()
+	waitClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
+			DisableKeepAlives: true,
+		},
+		Timeout: time.Second,
+	}
+	waitUntilReady(t, waitClient, baseURL+"/healthz")
+	return client, baseURL
+}
+
+func waitUntilReady(t *testing.T, client *http.Client, url string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last error
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(url)
+		if err == nil {
+			drainErr := drain(resp)
+			if resp.StatusCode == http.StatusOK {
+				if drainErr != nil {
+					t.Fatal(drainErr)
+				}
+				return
+			}
+			last = fmt.Errorf("status %d", resp.StatusCode)
+		} else {
+			last = err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("server not ready: %v", last)
+}
+
+func drainAndClose(t *testing.T, resp *http.Response) {
+	t.Helper()
+	if err := drain(resp); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func drain(resp *http.Response) error {
+	_, copyErr := io.Copy(io.Discard, resp.Body)
+	closeErr := resp.Body.Close()
+	return errors.Join(copyErr, closeErr)
+}
+
+func TestWriteTokenProtectsMutatingRoutes(t *testing.T) {
+	app := newTestApp(t)
+	app.cfg.WriteToken = "secret-token"
+	srv := httptest.NewServer(mustHandler(t, app))
+	t.Cleanup(srv.Close)
+
+	probe, err := srv.Client().Get(srv.URL + "/api/bench/probe?experiment_id=tok1&sample_index=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainAndClose(t, probe)
+	if probe.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("probe without token=%d", probe.StatusCode)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/bench/probe?experiment_id=tok1&sample_index=1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer secret-token")
+	authed, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainAndClose(t, authed)
+	if authed.StatusCode != http.StatusOK {
+		t.Fatalf("probe with token=%d", authed.StatusCode)
+	}
+
+	info, err := srv.Client().Get(srv.URL + "/api/info")
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainAndClose(t, info)
+	if info.StatusCode != http.StatusOK {
+		t.Fatalf("info should stay public=%d", info.StatusCode)
+	}
+}
+
+func TestServeCACanBeDisabled(t *testing.T) {
+	app := newTestApp(t)
+	app.cfg.ServeCA = false
+	srv := httptest.NewServer(mustHandler(t, app))
+	t.Cleanup(srv.Close)
+	resp, err := srv.Client().Get(srv.URL + "/ca.crt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status=%d", resp.StatusCode)
+	}
+}
+
+func TestResultsReportsTruncation(t *testing.T) {
+	app := newTestApp(t)
+	srv := httptest.NewServer(mustHandler(t, app))
+	t.Cleanup(srv.Close)
+	gen, err := srv.Client().Post(srv.URL+"/api/blobs?name=cap.bin&size=32", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainAndClose(t, gen)
+	if gen.StatusCode != http.StatusCreated {
+		t.Fatalf("generate=%d", gen.StatusCode)
+	}
+	gen2, err := srv.Client().Post(srv.URL+"/api/blobs?name=cap2.bin&size=32", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drainAndClose(t, gen2)
+	if gen2.StatusCode != http.StatusCreated {
+		t.Fatalf("generate2=%d", gen2.StatusCode)
+	}
+	resp, err := srv.Client().Get(srv.URL + "/api/results?limit=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var payload struct {
+		Runs      []results.Run `json:"runs"`
+		Total     int           `json:"total"`
+		Limit     int           `json:"limit"`
+		Truncated bool          `json:"truncated"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Limit != 1 || len(payload.Runs) != 1 || payload.Total < 2 || !payload.Truncated {
+		t.Fatalf("payload=%+v", payload)
+	}
+}
+
+func TestSecurityHeadersOnDashboard(t *testing.T) {
+	app := newTestApp(t)
+	srv := httptest.NewServer(mustHandler(t, app))
+	t.Cleanup(srv.Close)
+	resp, err := srv.Client().Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.Header.Get("Content-Security-Policy") == "" {
+		t.Fatal("missing CSP")
+	}
+	if resp.Header.Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("nosniff=%q", resp.Header.Get("X-Content-Type-Options"))
 	}
 }
 
