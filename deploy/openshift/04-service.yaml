@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: tlsbench
+  namespace: tlsbench
+  labels:
+    app.kubernetes.io/name: tlsbench
+spec:
+  selector:
+    app.kubernetes.io/name: tlsbench
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+    - name: https
+      port: 8443
+      targetPort: https

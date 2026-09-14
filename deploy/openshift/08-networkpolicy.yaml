@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tlsbench
+  namespace: tlsbench
+  labels:
+    app.kubernetes.io/name: tlsbench
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: tlsbench
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              network.openshift.io/policy-group: ingress
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 8443

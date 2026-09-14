@@ -1,0 +1,17 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: tlsbench-passthrough
+  namespace: tlsbench
+  labels:
+    app.kubernetes.io/name: tlsbench
+    tlsbench.termination: passthrough
+spec:
+  to:
+    kind: Service
+    name: tlsbench
+  port:
+    targetPort: https
+  tls:
+    termination: passthrough
+    insecureEdgeTerminationPolicy: None

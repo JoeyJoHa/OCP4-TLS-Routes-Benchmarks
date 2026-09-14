@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'">
+  <title>OCP4 TLS Route Benchmarks</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="top">
+    <div>
+      <p class="eyebrow">OpenShift TLS target</p>
+      <h1>Route and Service benchmarks</h1>
+    </div>
+    <label class="refresh-toggle">
+      <input type="checkbox" id="auto-refresh" checked>
+      Auto-refresh
+    </label>
+  </header>
+
+  <section class="cards" id="connection-cards">
+    <article class="card">
+      <h2>This request</h2>
+      <p class="muted" id="conn-summary">Loading connection details…</p>
+      <dl id="conn-details"></dl>
+    </article>
+    <article class="card">
+      <h2>PVC blobs</h2>
+      <p class="muted">Files written under DATA_DIR for reuse in tables.</p>
+      <ul id="blob-list" class="blob-list"></ul>
+    </article>
+  </section>
+
+  <section class="guide-panel">
+    <details open>
+      <summary>Metrics guide — what to look for</summary>
+      <div class="guide-grid" id="metrics-guide"></div>
+      <p class="guide-foot muted">
+        Color hints in the table are rough guides for same-cluster runs. WAN latency, RSA-4096, or cold PVC writes will shift “good” ranges.
+        Run handshake studies with
+        <code>./scripts/vm-bench.sh --handshake-only --http1.1 --repeat 30 --route-mode passthrough</code>.
+      </p>
+    </details>
+  </section>
+
+  <section class="table-panel">
+    <div class="table-head">
+      <h2>Benchmark results</h2>
+      <div class="filters">
+        <label>
+          Operation
+          <select id="filter-op">
+            <option value="">All</option>
+            <option value="generate">Generate</option>
+            <option value="upload">Upload</option>
+            <option value="download">Download</option>
+            <option value="handshake">Handshake</option>
+          </select>
+        </label>
+        <label>
+          TLS at pod
+          <select id="filter-tls">
+            <option value="">All</option>
+            <option value="true">Yes</option>
+            <option value="false">No</option>
+          </select>
+        </label>
+        <label>
+          Route mode
+          <select id="filter-route">
+            <option value="">All</option>
+            <option value="edge">edge</option>
+            <option value="passthrough">passthrough</option>
+            <option value="reencrypt">reencrypt</option>
+            <option value="service-http">service-http</option>
+            <option value="service-https">service-https</option>
+          </select>
+        </label>
+        <label class="refresh-toggle">
+          <input type="checkbox" id="group-experiments" checked>
+          Collapse repeats
+        </label>
+        <button type="button" class="btn-secondary" id="column-picker-btn" aria-expanded="false" aria-controls="column-picker">
+          Columns
+        </button>
+      </div>
+    </div>
+
+    <div id="column-picker" class="column-picker hidden" role="dialog" aria-label="Choose visible columns">
+      <div class="column-picker-head">
+        <strong>Visible columns</strong>
+        <button type="button" class="btn-link" id="column-reset">Reset defaults</button>
+      </div>
+      <div class="column-picker-grid" id="column-picker-options"></div>
+    </div>
+
+    <p class="muted" id="table-hint">
+      Repeated runs with the same <code>experiment_id</code> appear as one summary row. Click the row or ▶ to expand individual samples.
+      On <strong>reencrypt</strong> Routes, compare <strong>TLS hs cli</strong> (client→router) with <strong>TLS hs srv</strong> (router→pod).
+      <strong>TLS hs cli</strong> is empty until <code>vm-bench.sh</code> posts curl timings; reused HTTP/2 streams show <strong>Reused</strong> and must not be compared to a cold p50.
+    </p>
+    <p class="muted metric-warn" id="results-truncated" hidden></p>
+
+    <div class="table-wrap">
+      <table>
+        <thead id="results-head">
+          <tr></tr>
+        </thead>
+        <tbody id="results-body">
+          <tr><td colspan="20" class="empty">No runs yet.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <script src="/static/app.js"></script>
+</body>
+</html>
